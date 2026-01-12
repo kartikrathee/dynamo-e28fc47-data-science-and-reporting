@@ -1,0 +1,164 @@
+{
+    "results": {
+        "tool": {
+            "name": "pytest",
+            "version": "8.4.1"
+        },
+        "summary": {
+            "tests": 16,
+            "passed": 16,
+            "failed": 0,
+            "skipped": 0,
+            "pending": 0,
+            "other": 0,
+            "start": 1784042849.692947,
+            "stop": 1784042850.1671329
+        },
+        "tests": [
+            {
+                "name": "test_outputs.py::test_source_files_exist",
+                "status": "passed",
+                "duration": 0.00043208400029470795,
+                "start": 1784042849.704237,
+                "stop": 1784042849.704791,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_simulation_uses_openmp",
+                "status": "passed",
+                "duration": 0.0003243739997742523,
+                "start": 1784042849.7048635,
+                "stop": 1784042849.7052836,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_makefile_supports_openmp",
+                "status": "passed",
+                "duration": 0.0003353739998601668,
+                "start": 1784042849.7053533,
+                "stop": 1784042849.7057717,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_run_script_sets_thread_count",
+                "status": "passed",
+                "duration": 0.000306209000200397,
+                "start": 1784042849.705851,
+                "stop": 1784042849.7062426,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_output_files_exist",
+                "status": "passed",
+                "duration": 0.0002818339999066666,
+                "start": 1784042849.7063162,
+                "stop": 1784042849.7066722,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_trajectory_format",
+                "status": "passed",
+                "duration": 0.000612207999893144,
+                "start": 1784042849.7067242,
+                "stop": 1784042849.7074122,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_energy_log_row_count",
+                "status": "passed",
+                "duration": 0.00029887499999858846,
+                "start": 1784042849.7074652,
+                "stop": 1784042849.707837,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_energy_log_total_matches_components",
+                "status": "passed",
+                "duration": 0.00033091599993895215,
+                "start": 1784042849.7078896,
+                "stop": 1784042849.7082903,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_energy_conservation",
+                "status": "passed",
+                "duration": 0.0003026249999038555,
+                "start": 1784042849.7083428,
+                "stop": 1784042849.708712,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_temperature_stats_match_energy_log",
+                "status": "passed",
+                "duration": 0.0003819999999450374,
+                "start": 1784042849.7087784,
+                "stop": 1784042849.7092311,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_rdf_matches_trajectory",
+                "status": "passed",
+                "duration": 0.14634545900003104,
+                "start": 1784042849.7092824,
+                "stop": 1784042849.8557827,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_timing_log_has_positive_values",
+                "status": "passed",
+                "duration": 0.00041245700003855745,
+                "start": 1784042849.855889,
+                "stop": 1784042849.8563912,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_performance_throughput",
+                "status": "passed",
+                "duration": 0.00030274999994617247,
+                "start": 1784042849.8564706,
+                "stop": 1784042849.8568482,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_performance_compute_fraction",
+                "status": "passed",
+                "duration": 0.00041433299998061557,
+                "start": 1784042849.8569152,
+                "stop": 1784042849.8574107,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_summary_json_passes_validation",
+                "status": "passed",
+                "duration": 0.0003727079999862326,
+                "start": 1784042849.8574708,
+                "stop": 1784042849.8579195,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_simulation_compiles",
+                "status": "passed",
+                "duration": 0.3087990000001355,
+                "start": 1784042849.857982,
+                "stop": 1784042850.166969,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            }
+        ]
+    }
+}

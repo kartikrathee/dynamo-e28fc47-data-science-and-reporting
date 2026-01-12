@@ -1,0 +1,28 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-8.4.1, pluggy-1.6.0
+cachedir: /tmp/pytest_cache
+rootdir: /tests
+plugins: json-ctrf-0.3.5
+collected 16 items
+
+../tests/test_outputs.py ................                                [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_source_files_exist
+PASSED ../tests/test_outputs.py::test_simulation_uses_openmp
+PASSED ../tests/test_outputs.py::test_makefile_supports_openmp
+PASSED ../tests/test_outputs.py::test_run_script_sets_thread_count
+PASSED ../tests/test_outputs.py::test_output_files_exist
+PASSED ../tests/test_outputs.py::test_trajectory_format
+PASSED ../tests/test_outputs.py::test_energy_log_row_count
+PASSED ../tests/test_outputs.py::test_energy_log_total_matches_components
+PASSED ../tests/test_outputs.py::test_energy_conservation
+PASSED ../tests/test_outputs.py::test_temperature_stats_match_energy_log
+PASSED ../tests/test_outputs.py::test_rdf_matches_trajectory
+PASSED ../tests/test_outputs.py::test_timing_log_has_positive_values
+PASSED ../tests/test_outputs.py::test_performance_throughput
+PASSED ../tests/test_outputs.py::test_performance_compute_fraction
+PASSED ../tests/test_outputs.py::test_summary_json_passes_validation
+PASSED ../tests/test_outputs.py::test_simulation_compiles
+============================== 16 passed in 0.48s ==============================
