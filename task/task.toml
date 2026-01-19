@@ -1,29 +1,44 @@
-# Task configuration schema version
-version = "2.0"
+artifacts = [
+  "/app/particles.dat",
+  "/app/simulation.cpp",
+  "/app/Makefile",
+  "/app/run_simulation.sh",
+  "/app/energy.log",
+  "/app/timing.log",
+  "/app/trajectory.xyz",
+  "/app/temperature_stats.txt",
+  "/app/rdf.dat",
+  "/app/performance.txt",
+  "/app/summary.json",
+]
+
+[task]
+name = "dynamo/lj-nve-openmp"
+description = "Build and validate a parallel Lennard-Jones NVE molecular dynamics pipeline in C++ with OpenMP."
 
 [metadata]
-author_name = "anonymous"
-author_email = "anonymous"
-difficulty = "hard"
-category = "scientific-computing"
-subcategories = ["materials-science"]
-codebase_size = "minimal"
-languages = ["bash", "c++", "awk", "python"]
-tags = ["openmp", "molecular-dynamics", "materials-science", "c++", "awk", "scripting"]
-expert_time_estimate_min = 45
-junior_time_estimate_min = 120
+category = "data_science_and_reporting"
+subcategory = "experiment_and_metrics_analysis"
+model_tested = "Opus-4.8"
+agent_tested = "Terminus-2"
+task_objective = ["implement", "analyze"]
+artifact_type = ["mathematical_or_scientific_model", "generated_output_artifact", "codebase"]
+expert_time_estimate_hours = 0.75
+difficulty_explanation = "Requires correct Lennard-Jones force calculation with periodic boundaries, OpenMP parallelization, Velocity Verlet integration, and post-processing that recomputes temperature statistics, RDF, and performance metrics from simulation outputs."
+solution_explanation = "Generate a seeded lattice initial condition, implement an OpenMP Velocity Verlet NVE simulator, run 100 steps with trajectory logging, then derive temperature statistics, RDF, performance metrics, and a summary JSON from the logs."
+verification_explanation = "Pytest checks source artifacts, OpenMP usage, output file formats, energy conservation, recomputed temperature and RDF values, performance metrics, and summary JSON consistency against measured simulation data."
 
-# Sandbox environment limits
-[environment]
-network_mode = "public"
-build_timeout_sec = 600.0
-cpus = 2
-memory_mb = 4096
-storage_mb = 10240
-workdir = "/app"
+[verifier]
+timeout_sec = 300.0
 
 [agent]
 timeout_sec = 900.0
 
-[verifier]
-timeout_sec = 300.0
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
