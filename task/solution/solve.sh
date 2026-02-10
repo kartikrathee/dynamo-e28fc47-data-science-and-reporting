@@ -5,45 +5,46 @@
 
 set -euo pipefail
 
+cd /app
+
 rm -f simulation.cpp Makefile run_simulation.sh particles.dat \
       simulation *.o trajectory.xyz energy.log timing.log \
-      temperature_stats.txt rdf.dat performance.txt summary.json
+      temperature_stats.txt rdf.dat performance.txt scaling.txt summary.json
 
-N_PARTICLES=1000
-BOX_DIM=10.0
-CUTOFF_RADIUS=2.5
-DT=0.00001
-TOTAL_STEPS=100
+TOTAL_STEPS=500
 OPENMP_THREADS=4
 
 export OMP_NUM_THREADS=$OPENMP_THREADS
 
 echo "Generating initial particle configuration..."
-awk '
-BEGIN {
-    srand(42)
-    spacing = 1.0
-    for (i = 0; i < 1000; i++) {
-        ix = i % 10
-        iy = int(i / 10) % 10
-        iz = int(i / 100)
-        x = (ix + 0.5) * spacing
-        y = (iy + 0.5) * spacing
-        z = (iz + 0.5) * spacing
+python3 << 'PY' > particles.dat
+import math
+import random
 
-        u1 = rand()
-        u2 = rand()
-        z1 = sqrt(-2 * log(u1 + 1e-12)) * cos(2 * 3.14159 * u2)
-        z2 = sqrt(-2 * log(u1 + 1e-12)) * sin(2 * 3.14159 * u2)
-        vx = z1 * sqrt(1.0 / 3.0)
-        vy = z2 * sqrt(1.0 / 3.0)
-        u3 = rand()
-        u4 = rand()
-        z3 = sqrt(-2 * log(u3 + 1e-12)) * cos(2 * 3.14159 * u4)
-        vz = z3 * sqrt(1.0 / 3.0)
-        printf "%d %.6f %.6f %.6f %.6f %.6f %.6f\n", i, x, y, z, vx, vy, vz
-    }
-}' > particles.dat
+rng = random.Random(42)
+spacing = 1.0
+
+def box_muller():
+    u1 = max(rng.random(), 1e-12)
+    u2 = rng.random()
+    radius = math.sqrt(-2.0 * math.log(u1))
+    angle = 2.0 * math.pi * u2
+    return radius * math.cos(angle), radius * math.sin(angle)
+
+for particle_id in range(1000):
+    ix = particle_id % 10
+    iy = (particle_id // 10) % 10
+    iz = particle_id // 100
+    x = (ix + 0.5) * spacing
+    y = (iy + 0.5) * spacing
+    z = (iz + 0.5) * spacing
+    z1, z2 = box_muller()
+    vx = z1 * math.sqrt(1.0 / 3.0)
+    vy = z2 * math.sqrt(1.0 / 3.0)
+    z3, _ = box_muller()
+    vz = z3 * math.sqrt(1.0 / 3.0)
+    print(f"{particle_id} {x:.6f} {y:.6f} {z:.6f} {vx:.6f} {vy:.6f} {vz:.6f}")
+PY
 
 cat > simulation.cpp << 'EOF'
 #include <chrono>
@@ -131,9 +132,6 @@ public:
             particles[i].fx = particles[i].fy = particles[i].fz = 0.0;
         }
 
-#ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic)
-#endif
         for (int i = 0; i < n_particles; ++i) {
             for (int j = i + 1; j < n_particles; ++j) {
                 const double r2 = distance_sq(particles[i], particles[j]);
@@ -175,7 +173,7 @@ public:
         }
 
 #ifdef _OPENMP
-#pragma omp parallel for reduction(+ : pe) schedule(dynamic)
+#pragma omp parallel for reduction(+ : pe)
 #endif
         for (int i = 0; i < n_particles; ++i) {
             for (int j = i + 1; j < n_particles; ++j) {
@@ -270,12 +268,12 @@ public:
 };
 
 int main(int argc, char** argv) {
-    int steps = 100;
+    int steps = 500;
     if (argc > 2 && std::string(argv[1]) == "--steps") {
         steps = std::atoi(argv[2]);
     }
 
-    MDSimulation sim(1000, 10.0, 2.5, 0.00001, steps);
+    MDSimulation sim(1000, 10.0, 2.5, 0.001, steps);
     sim.load_particles("particles.dat");
     sim.run();
     return 0;
@@ -303,7 +301,7 @@ set -euo pipefail
 export OMP_NUM_THREADS=4
 make clean
 make
-./simulation --steps 100
+./simulation --steps 500
 EOF
 chmod +x run_simulation.sh
 
@@ -311,8 +309,27 @@ make clean
 make
 
 echo "Running full simulation..."
-export OMP_NUM_THREADS=4
-./simulation --steps 100
+./simulation --steps "$TOTAL_STEPS"
+
+PARALLEL_TIME=$(awk '/Total runtime/ {print $3}' timing.log)
+BACKUP_DIR=$(mktemp -d)
+cp energy.log trajectory.xyz timing.log "$BACKUP_DIR/"
+
+echo "Running serial timing benchmark..."
+export OMP_NUM_THREADS=1
+rm -f energy.log trajectory.xyz timing.log
+./simulation --steps "$TOTAL_STEPS"
+SERIAL_TIME=$(awk '/Total runtime/ {print $3}' timing.log)
+cp "$BACKUP_DIR/energy.log" "$BACKUP_DIR/trajectory.xyz" "$BACKUP_DIR/timing.log" .
+export OMP_NUM_THREADS=$OPENMP_THREADS
+rm -rf "$BACKUP_DIR"
+
+SPEEDUP=$(awk -v serial="$SERIAL_TIME" -v parallel="$PARALLEL_TIME" 'BEGIN { if (parallel > 0) printf "%.4f", serial / parallel; else print "0" }')
+cat > scaling.txt << EOF
+Parallel runtime (4 threads): ${PARALLEL_TIME} s
+Serial runtime (1 thread): ${SERIAL_TIME} s
+Speedup: ${SPEEDUP}
+EOF
 
 echo "Analyzing results..."
 
@@ -384,9 +401,9 @@ END {
 }' > rdf.dat
 
 TOTAL_TIME=$(awk '/Total runtime/ {print $3}' timing.log)
-FORCE_TIME=$(awk '/Force calculation time/ {print $3}' timing.log)
+FORCE_TIME=$(awk '/Force calculation time/ {print $4}' timing.log)
 INTEG_TIME=$(awk '/Integration time/ {print $3}' timing.log)
-PPS=$(awk -v n=1000 -v steps=100 -v t="$TOTAL_TIME" 'BEGIN { if (t > 0) printf "%.2f", (n * steps) / t / 4; else print "0" }')
+PPS=$(awk -v n=1000 -v steps=500 -v t="$TOTAL_TIME" 'BEGIN { if (t > 0) printf "%.2f", (n * steps) / t / 4; else print "0" }')
 EFF=$(awk -v force="$FORCE_TIME" -v integ="$INTEG_TIME" -v total="$TOTAL_TIME" 'BEGIN {
     if (total > 0) {
         eff = (force + integ) / total
@@ -407,7 +424,6 @@ EOF
 
 python3 << 'PY'
 import json
-import math
 
 rows = []
 with open("energy.log") as f:
@@ -417,7 +433,7 @@ with open("energy.log") as f:
         rows.append(float(total))
 
 drift = abs(rows[-1] - rows[0]) / abs(rows[0])
-status = "PASS" if drift < 0.10 else "FAIL"
+status = "PASS" if drift < 0.05 else "FAIL"
 
 mean_t = None
 with open("temperature_stats.txt") as f:
