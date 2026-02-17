@@ -18,8 +18,8 @@ name = "dynamo/lj-nve-openmp"
 description = "Build and validate a parallel Lennard-Jones NVE molecular dynamics pipeline in C++ with OpenMP."
 
 [metadata]
-category = "data_science_and_reporting"
-subcategory = "experiment_and_metrics_analysis"
+category = "scientific_computing_and_domain_science"
+subcategory = "materials_science"
 model_tested = "Opus-4.8"
 agent_tested = "Terminus-2"
 task_objective = ["implement", "analyze"]
