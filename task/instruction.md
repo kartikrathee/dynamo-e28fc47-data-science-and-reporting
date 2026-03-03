@@ -25,7 +25,7 @@ Implement a periodic-boundary NVE simulation in `/app/simulation.cpp` with:
 Also create:
 
 - `/app/Makefile` (must compile with `-fopenmp`)
-- `/app/run_simulation.sh` (sets `OMP_NUM_THREADS=4`, builds and runs `./simulation --steps 500`)
+- `/app/run_simulation.sh` (sets `OMP_NUM_THREADS=4`, builds and runs `/app/simulation --steps 500`)
 
 ### Simulation outputs
 
@@ -96,5 +96,5 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - No external libraries beyond the C++ standard library, OpenMP, and Python standard library for initial-condition generation
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
-- The compiled `./simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
+- The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
 - Verification compares step-0/step-500 energies and RDF peaks against oracle-calibrated reference values for this seeded initial condition (stored under `/tests/reference/` at verify time, not visible during the agent run)
