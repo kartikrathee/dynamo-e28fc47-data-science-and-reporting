@@ -7,11 +7,11 @@ Build a multi-threaded Lennard-Jones (LJ) molecular dynamics pipeline in C++ wit
 - Particles: N = 1,000
 - Box: cubic, Lx = Ly = Lz = 10.0 (reduced units)
 - Cutoff: rc = 2.5σ
-- Time step: dt = 0.001
+- Time step: dt = 0.0005
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free (incorrect parallel force updates fail verification)
-- Initial conditions: generate `/app/particles.dat` with format `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) so particle 0 sits at (0.5, 0.5, 0.5). Assign Maxwell-Boltzmann velocities at T = 1.0 using `random.seed(42)` in Python (Box-Muller with the standard library `random` module only).
+- Initial conditions: generate `/app/particles.dat` with format `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) so particle 0 sits at (0.5, 0.5, 0.5). Assign Maxwell-Boltzmann velocities at T = 1.0 in reduced units (kB = m = 1): each velocity component is an independent standard normal N(0, 1) with variance kT/m = 1. Use `random.seed(42)` and Box-Muller with the standard library `random` module only; for each particle call Box-Muller twice, assign the three returned normals to vx, vy, vz, and discard the fourth.
 
 ## 2. C++ Simulation
 
