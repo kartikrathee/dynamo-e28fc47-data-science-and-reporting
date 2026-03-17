@@ -23,11 +23,8 @@ chmod +x /app/run_simulation.sh
 echo "Generating initial particle configuration..."
 python3 "$SCRIPT_DIR/generate_particles.py" > particles.dat
 
-make clean
-make
-
 echo "Running full simulation..."
-./simulation --steps "$TOTAL_STEPS"
+/app/run_simulation.sh
 
 PARALLEL_TIME=$(awk '/Total runtime/ {print $3}' timing.log)
 BACKUP_DIR=$(mktemp -d)
@@ -36,7 +33,7 @@ cp energy.log trajectory.xyz timing.log "$BACKUP_DIR/"
 echo "Running serial timing benchmark..."
 export OMP_NUM_THREADS=1
 rm -f energy.log trajectory.xyz timing.log
-./simulation --steps "$TOTAL_STEPS"
+/app/simulation --steps "$TOTAL_STEPS"
 SERIAL_TIME=$(awk '/Total runtime/ {print $3}' timing.log)
 cp "$BACKUP_DIR/energy.log" "$BACKUP_DIR/trajectory.xyz" "$BACKUP_DIR/timing.log" .
 export OMP_NUM_THREADS=$OPENMP_THREADS

@@ -21,7 +21,9 @@ REFERENCE_PATH = TESTS_DIR / "reference" / "expected.json"
 N_PARTICLES = 1000
 BOX_DIM = 10.0
 TOTAL_STEPS = 500
+DT = 0.0005
 TRAJECTORY_INTERVAL = 10
+OPENMP_THREADS = 4
 ENERGY_DRIFT_TOL = 0.05
 RDF_BIN_WIDTH = 0.1
 RDF_MAX_R = 5.0
@@ -81,6 +83,14 @@ def _minimum_image(delta: float) -> float:
     return delta - BOX_DIM * round(delta / BOX_DIM)
 
 
+def _is_float(value: str) -> bool:
+    try:
+        float(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _recompute_rdf(positions: list[tuple[float, float, float]]) -> dict[float, float]:
     num_bins = int(RDF_MAX_R / RDF_BIN_WIDTH) + 1
     counts = [0.0] * num_bins
@@ -136,11 +146,12 @@ def test_makefile_supports_openmp() -> None:
     assert "fopenmp" in (APP / "Makefile").read_text()
 
 
-def test_run_script_sets_thread_count() -> None:
-    """The run script must set OMP_NUM_THREADS and run 500 steps."""
+def test_run_script_matches_instruction() -> None:
+    """run_simulation.sh must set OMP_NUM_THREADS=4 and run /app/simulation --steps 500."""
     content = (APP / "run_simulation.sh").read_text()
-    assert "OMP_NUM_THREADS" in content
-    assert "500" in content
+    assert "OMP_NUM_THREADS=4" in content
+    assert "/app/simulation" in content
+    assert "--steps 500" in content
 
 
 def test_output_files_exist() -> None:
@@ -216,7 +227,7 @@ def test_rerun_simulation_reproduces_step0_energy() -> None:
             check=True,
             capture_output=True,
             text=True,
-            env={**os.environ, "OMP_NUM_THREADS": "4"},
+            env={**os.environ, "OMP_NUM_THREADS": str(OPENMP_THREADS)},
         )
         with (work / "energy.log").open() as handle:
             header = next(handle)
@@ -237,12 +248,14 @@ def test_temperature_stats_match_energy_log() -> None:
 
 
 def test_rdf_matches_trajectory() -> None:
-    """RDF values must match recomputation from the last trajectory frame."""
+    """rdf.dat must be two-column g(r) from the last trajectory frame with 0.1 bins to r=5.0."""
     expected = _recompute_rdf(_parse_last_trajectory_frame())
     lines = [line.strip() for line in (APP / "rdf.dat").read_text().splitlines() if line.strip()]
     assert len(lines) == int(RDF_MAX_R / RDF_BIN_WIDTH) + 1
     for line in lines:
-        r_val, gr_val = map(float, line.split())
+        parts = line.split()
+        assert len(parts) == 2
+        r_val, gr_val = map(float, parts)
         if r_val in expected:
             assert math.isclose(gr_val, expected[r_val], rel_tol=0.05, abs_tol=0.05)
 
@@ -255,33 +268,42 @@ def test_rdf_peaks_match_reference(reference: dict) -> None:
         assert math.isclose(lines[r_val], ref_gr, rel_tol=0.05, abs_tol=0.05)
 
 
-def test_timing_log_has_positive_values() -> None:
-    """Timing log must report positive measured durations."""
-    numbers = [float(value) for value in re.findall(r"[0-9]+(?:\.[0-9]+)?", (APP / "timing.log").read_text())]
-    assert all(number > 0 for number in numbers)
-
-
 def test_performance_formulas() -> None:
-    """Performance.txt must apply the instruction formulas to timing.log values."""
+    """performance.txt must use the instruction labels and formulas derived from timing.log."""
     timing = (APP / "timing.log").read_text()
     force_time = float(re.search(r"Force calculation time:\s*([0-9.]+)", timing).group(1))
     integ_time = float(re.search(r"Integration time:\s*([0-9.]+)", timing).group(1))
     total_time = float(re.search(r"Total runtime:\s*([0-9.]+)", timing).group(1))
     content = (APP / "performance.txt").read_text()
+    assert re.search(r"^Total Simulation Time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
+    assert re.search(r"^Force Calculation Time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
+    assert re.search(r"^Integration Time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
+    assert re.search(r"^Particles per second per core:\s*[0-9.]+\s*$", content, re.MULTILINE)
+    assert re.search(r"^Parallel Efficiency:\s*[0-9.]+\s*$", content, re.MULTILINE)
     reported_total = float(re.search(r"Total Simulation Time:\s*([0-9.]+)", content).group(1))
+    reported_force = float(re.search(r"Force Calculation Time:\s*([0-9.]+)", content).group(1))
+    reported_integ = float(re.search(r"Integration Time:\s*([0-9.]+)", content).group(1))
     reported_pps = float(re.search(r"Particles per second per core:\s*([0-9.]+)", content).group(1))
     reported_eff = float(re.search(r"Parallel Efficiency:\s*([0-9.]+)", content).group(1))
-    expected_pps = (N_PARTICLES * TOTAL_STEPS) / total_time / 4
+    expected_pps = (N_PARTICLES * TOTAL_STEPS) / total_time / OPENMP_THREADS
     expected_eff = min((force_time + integ_time) / total_time, 1.0)
-    assert reported_total > 0 and reported_pps > 0 and reported_eff > 0
+    assert reported_total > 0 and reported_force > 0 and reported_integ > 0
+    assert reported_pps > 0 and reported_eff > 0
     assert math.isclose(reported_total, total_time, rel_tol=1e-3)
+    assert math.isclose(reported_force, force_time, rel_tol=1e-3)
+    assert math.isclose(reported_integ, integ_time, rel_tol=1e-3)
     assert math.isclose(reported_pps, expected_pps, rel_tol=0.05)
     assert math.isclose(reported_eff, expected_eff, rel_tol=0.05)
 
 
 def test_scaling_report() -> None:
-    """Scaling.txt must report parallel and serial runtimes and speedup from real runs."""
+    """scaling.txt must use the instruction labels and report speedup as serial / parallel."""
     content = (APP / "scaling.txt").read_text()
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    assert len(lines) == 3
+    assert lines[0].startswith("Parallel runtime (4 threads):")
+    assert lines[1].startswith("Serial runtime (1 thread):")
+    assert lines[2].startswith("Speedup:")
     parallel = float(re.search(r"Parallel runtime \(4 threads\):\s*([0-9.]+)", content).group(1))
     serial = float(re.search(r"Serial runtime \(1 thread\):\s*([0-9.]+)", content).group(1))
     speedup = float(re.search(r"Speedup:\s*([0-9.]+)", content).group(1))
@@ -290,8 +312,15 @@ def test_scaling_report() -> None:
 
 
 def test_summary_json_fields() -> None:
-    """Summary JSON must contain every field with values consistent with the analysis outputs."""
+    """summary.json must contain the five instruction fields with consistent values."""
     summary = json.loads((APP / "summary.json").read_text())
+    assert set(summary.keys()) == {
+        "validation_status",
+        "energy_conservation",
+        "mean_temperature",
+        "parallel_efficiency",
+        "final_total_energy",
+    }
     rows = _read_energy_rows()
     drift = abs(float(rows[-1]["total"]) - float(rows[0]["total"])) / abs(float(rows[0]["total"]))
     stats = _parse_temperature_stats()
@@ -308,3 +337,55 @@ def test_simulation_compiles() -> None:
     subprocess.run(["make", "clean"], cwd=APP, check=False, capture_output=True)
     result = subprocess.run(["make"], cwd=APP, capture_output=True, text=True)
     assert result.returncode == 0
+
+
+def test_energy_log_tsv_header() -> None:
+    """energy.log must begin with the tab-separated header specified in the instruction."""
+    header = (APP / "energy.log").read_text().splitlines()[0]
+    assert header == "Step\tKinetic\tPotential\tTotal"
+
+
+def test_particles_dat_count_and_format() -> None:
+    """particles.dat must contain 1000 rows in the id x y z vx vy vz format."""
+    lines = (APP / "particles.dat").read_text().splitlines()
+    assert len(lines) == N_PARTICLES
+    for line in lines:
+        fields = line.split()
+        assert len(fields) == 7
+        assert fields[0].isdigit()
+        assert all(_is_float(field) for field in fields[1:])
+
+
+def test_temperature_stats_output_format() -> None:
+    """temperature_stats.txt must use the four labeled fields from the instruction."""
+    lines = [line.strip() for line in (APP / "temperature_stats.txt").read_text().splitlines() if line.strip()]
+    assert len(lines) == 4
+    assert lines[0].startswith("Mean Temperature:")
+    assert lines[1].startswith("Std Dev Temperature:")
+    assert lines[2].startswith("Min Temperature:")
+    assert lines[3].startswith("Max Temperature:")
+    for line in lines:
+        assert float(line.split(":", 1)[1].strip()) > 0
+
+
+def test_timing_log_reports_force_integration_and_total() -> None:
+    """timing.log must report force, integration, and total wall-clock runtimes."""
+    content = (APP / "timing.log").read_text()
+    force_time = float(re.search(r"Force calculation time:\s*([0-9.]+)", content).group(1))
+    integ_time = float(re.search(r"Integration time:\s*([0-9.]+)", content).group(1))
+    total_time = float(re.search(r"Total runtime:\s*([0-9.]+)", content).group(1))
+    assert force_time > 0 and integ_time > 0 and total_time > 0
+
+
+def test_scaling_parallel_runtime_matches_parallel_timing() -> None:
+    """scaling.txt must record the parallel-run total runtime from timing.log."""
+    timing_total = float(
+        re.search(r"Total runtime:\s*([0-9.]+)", (APP / "timing.log").read_text()).group(1)
+    )
+    scaling_parallel = float(
+        re.search(
+            r"Parallel runtime \(4 threads\):\s*([0-9.]+)",
+            (APP / "scaling.txt").read_text(),
+        ).group(1)
+    )
+    assert math.isclose(scaling_parallel, timing_total, rel_tol=1e-3)

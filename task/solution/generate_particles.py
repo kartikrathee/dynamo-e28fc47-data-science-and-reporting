@@ -4,13 +4,13 @@
 import math
 import random
 
-rng = random.Random(42)
+random.seed(42)
 spacing = 1.0
 
 
 def box_muller() -> tuple[float, float]:
-    u1 = max(rng.random(), 1e-12)
-    u2 = rng.random()
+    u1 = max(random.random(), 1e-12)
+    u2 = random.random()
     radius = math.sqrt(-2.0 * math.log(u1))
     angle = 2.0 * math.pi * u2
     return radius * math.cos(angle), radius * math.sin(angle)
