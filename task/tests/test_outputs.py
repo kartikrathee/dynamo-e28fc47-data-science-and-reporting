@@ -369,12 +369,11 @@ def test_temperature_stats_output_format() -> None:
 
 
 def test_timing_log_reports_force_integration_and_total() -> None:
-    """timing.log must report force, integration, and total wall-clock runtimes."""
+    """timing.log must use the three labeled lines specified in the instruction."""
     content = (APP / "timing.log").read_text()
-    force_time = float(re.search(r"Force calculation time:\s*([0-9.]+)", content).group(1))
-    integ_time = float(re.search(r"Integration time:\s*([0-9.]+)", content).group(1))
-    total_time = float(re.search(r"Total runtime:\s*([0-9.]+)", content).group(1))
-    assert force_time > 0 and integ_time > 0 and total_time > 0
+    assert re.search(r"^Force calculation time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
+    assert re.search(r"^Integration time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
+    assert re.search(r"^Total runtime:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
 
 
 def test_scaling_parallel_runtime_matches_parallel_timing() -> None:

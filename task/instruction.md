@@ -30,7 +30,13 @@ Also create:
 ### Simulation outputs
 
 - `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step with computed energies
-- `/app/timing.log`: wall-clock seconds for force calculation, integration, and total runtime (measured, not hardcoded)
+- `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
+
+```
+Force calculation time: <seconds> s
+Integration time: <seconds> s
+Total runtime: <seconds> s
+```
 
 ## 3. Analysis Pipeline
 
@@ -97,4 +103,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification compares step-0/step-500 energies and RDF peaks against oracle-calibrated reference values for this seeded initial condition (stored under `/tests/reference/` at verify time, not visible during the agent run)
+- Verification compares step-0/step-500 energies and RDF peaks against oracle-calibrated reference values for this seeded initial condition (stored under `/tests/reference/` at verify time, not visible during the agent run). Gates: step-0 energy rtol 0.1%; step-500 total energy rtol 0.2%; RDF peak values ±5% per bin; re-executing the submitted binary on `/app/particles.dat` must reproduce step-0 total energy within 0.01%
