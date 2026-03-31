@@ -13,7 +13,7 @@ def box_muller() -> tuple[float, float]:
     u2 = random.random()
     radius = math.sqrt(-2.0 * math.log(u1))
     angle = 2.0 * math.pi * u2
-    return radius * math.cos(angle), radius * math.sin(angle)
+    return radius * math.cos(angle), radius * math.sin(angle)  # (z_cos, z_sin) per instruction
 
 
 for particle_id in range(1000):

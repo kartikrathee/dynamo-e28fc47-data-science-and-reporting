@@ -91,6 +91,22 @@ def _is_float(value: str) -> bool:
     return True
 
 
+def _parse_timing_log() -> dict[str, float]:
+    """Parse the three timing.log lines defined in instruction §2."""
+    content = (APP / "timing.log").read_text()
+    labels = {
+        "force": r"^Force calculation time:\s*([0-9.]+)\s*s\s*$",
+        "integration": r"^Integration time:\s*([0-9.]+)\s*s\s*$",
+        "total": r"^Total runtime:\s*([0-9.]+)\s*s\s*$",
+    }
+    values: dict[str, float] = {}
+    for key, pattern in labels.items():
+        match = re.search(pattern, content, re.MULTILINE)
+        assert match is not None, f"timing.log missing instruction §2 line for {key}"
+        values[key] = float(match.group(1))
+    return values
+
+
 def _recompute_rdf(positions: list[tuple[float, float, float]]) -> dict[float, float]:
     num_bins = int(RDF_MAX_R / RDF_BIN_WIDTH) + 1
     counts = [0.0] * num_bins
@@ -270,10 +286,10 @@ def test_rdf_peaks_match_reference(reference: dict) -> None:
 
 def test_performance_formulas() -> None:
     """performance.txt must use the instruction labels and formulas derived from timing.log."""
-    timing = (APP / "timing.log").read_text()
-    force_time = float(re.search(r"Force calculation time:\s*([0-9.]+)", timing).group(1))
-    integ_time = float(re.search(r"Integration time:\s*([0-9.]+)", timing).group(1))
-    total_time = float(re.search(r"Total runtime:\s*([0-9.]+)", timing).group(1))
+    timing = _parse_timing_log()
+    force_time = timing["force"]
+    integ_time = timing["integration"]
+    total_time = timing["total"]
     content = (APP / "performance.txt").read_text()
     assert re.search(r"^Total Simulation Time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
     assert re.search(r"^Force Calculation Time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
@@ -369,18 +385,14 @@ def test_temperature_stats_output_format() -> None:
 
 
 def test_timing_log_reports_force_integration_and_total() -> None:
-    """timing.log must use the three labeled lines specified in the instruction."""
-    content = (APP / "timing.log").read_text()
-    assert re.search(r"^Force calculation time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
-    assert re.search(r"^Integration time:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
-    assert re.search(r"^Total runtime:\s*[0-9.]+\s*s\s*$", content, re.MULTILINE)
+    """timing.log must use the three labeled lines specified in instruction §2."""
+    timing = _parse_timing_log()
+    assert timing["force"] > 0 and timing["integration"] > 0 and timing["total"] > 0
 
 
 def test_scaling_parallel_runtime_matches_parallel_timing() -> None:
     """scaling.txt must record the parallel-run total runtime from timing.log."""
-    timing_total = float(
-        re.search(r"Total runtime:\s*([0-9.]+)", (APP / "timing.log").read_text()).group(1)
-    )
+    timing_total = _parse_timing_log()["total"]
     scaling_parallel = float(
         re.search(
             r"Parallel runtime \(4 threads\):\s*([0-9.]+)",
