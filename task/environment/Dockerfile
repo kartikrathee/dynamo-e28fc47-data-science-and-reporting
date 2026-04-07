@@ -3,13 +3,14 @@ FROM public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:01f42367a0a9
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
+        ca-certificates \
         g++ \
         make \
         bc \
         gawk \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir \
     pytest==8.4.1 \
     pytest-json-ctrf==0.3.5
 

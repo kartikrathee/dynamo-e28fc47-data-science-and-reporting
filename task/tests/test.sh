@@ -4,7 +4,7 @@ set -euo pipefail
 mkdir -p /logs/verifier
 
 set +e
-python -m pytest \
+python3 -m pytest \
     -o cache_dir=/tmp/pytest_cache \
     --ctrf /logs/verifier/ctrf.json \
     /tests/test_outputs.py -rA
