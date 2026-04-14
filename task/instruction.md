@@ -10,7 +10,7 @@ Build a multi-threaded Lennard-Jones (LJ) molecular dynamics pipeline in C++ wit
 - Time step: dt = 0.0005
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
-- OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free (a serial O(N²) force accumulation satisfies this; incorrect parallel force updates fail verification)
+- OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free (incorrect parallel force updates fail verification)
 - Initial conditions: generate `/app/particles.dat` with format `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) so particle 0 sits at (0.5, 0.5, 0.5). Assign Maxwell-Boltzmann velocities at T = 1.0 in reduced units (kB = m = 1): each velocity component is an independent standard normal N(0, 1) with variance kT/m = 1. Use `random.seed(42)` and Box-Muller with the standard library `random` module only; for each particle call Box-Muller twice. Each call returns `(z_cos, z_sin) = (r·cos θ, r·sin θ)` in that order; assign `vx` and `vy` from the first call's cos and sin, `vz` from the second call's cos, and discard the second sin (the fourth draw).
 
 ## 2. C++ Simulation
@@ -55,7 +55,23 @@ Max Temperature: <max>
 
 ### `/app/rdf.dat`
 
-Compute g(r) from the last frame of `/app/trajectory.xyz` using minimum-image convention and bins of width 0.1 from r = 0.0 to 5.0. Two columns: `r g(r)`.
+Compute g(r) from the last frame of `/app/trajectory.xyz` using minimum-image convention. Use bins of width Δr = 0.1 from r = 0.0 to 5.0 inclusive (51 rows). Two columns: `r g(r)`.
+
+**Binning and normalization (normative):**
+
+1. For each unordered pair (i, j), compute minimum-image distance r; if r ≤ 5.0, increment bin `b = floor(r / Δr)` by 2 (count both i→j and j→i).
+2. Report **r as the bin left edge**: r = b · Δr (so rows are r = 0.0, 0.1, …, 5.0 — not bin centers).
+3. Number density ρ = N / L³ with N = 1000 and L = 10.0.
+4. Shell volume at the left edge: V_shell = 4π r² · Δr (thin-shell approximation evaluated at the left edge, not the exact spherical shell 4π/3 · [(r+Δr)³ − r³]).
+5. Normalize each bin: g(r) = count[b] / (N · ρ · V_shell); set g(0) = 0 when r = 0.
+
+Example first rows (illustrative format only):
+
+```
+0.0 0.000000
+0.1 <g(r)>
+1.0 <g(r)>
+```
 
 ### `/app/performance.txt`
 
