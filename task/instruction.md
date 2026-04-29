@@ -10,7 +10,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Time step: dt = 0.0005
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
-- OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free (incorrect parallel force updates fail verification)
+- OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
 - Initial conditions: generate `/app/particles.dat` as `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) with particle 0 at (0.5, 0.5, 0.5). At T = 1.0 (kB = m = 1), each velocity component is N(0, 1). Use `random.seed(42)` and stdlib Box-Muller only; two calls per particle. Each call returns `(z_cos, z_sin)` in that order; set vx, vy from the first call, vz from the second cos, discard the second sin.
 
 ## 2. C++ Simulation
@@ -55,15 +55,14 @@ Max Temperature: <max>
 
 ### `/app/rdf.dat`
 
-Compute g(r) from the last frame of `/app/trajectory.xyz` using minimum-image convention. Use bins of width Δr = 0.1 from r = 0.0 to 5.0 inclusive (51 rows). Two columns: `r g(r)`.
+From the **last** XYZ frame in `/app/trajectory.xyz` (step-500 configuration). Write 51 rows, two columns `r g(r)`, with Δr = 0.1 and r at bin **left edges** 0.0, 0.1, …, 5.0.
 
-**Binning and normalization (normative):**
+**Normative g(r) procedure:**
 
-1. For each unordered pair (i, j), compute minimum-image distance r; if r ≤ 5.0, increment bin `b = floor(r / Δr)` by 2 (count both i→j and j→i).
-2. Report **r as the bin left edge**: r = b · Δr (so rows are r = 0.0, 0.1, …, 5.0 — not bin centers).
-3. Number density ρ = N / L³ with N = 1000 and L = 10.0.
-4. Shell volume: V_shell = 4π r² · Δr at the left edge (not exact 4π/3[(r+Δr)³ − r³]).
-5. Normalize: g(r) = count[b] / (N · ρ · V_shell); g(0) = 0.
+1. For each pair with i < j, compute separations Δx, Δy, Δz; apply minimum-image per component: Δ' = Δ − L·round(Δ/L) with L = 10.0; then r = √(Δx'² + Δy'² + Δz'²).
+2. If r ≤ 5.0, bin b = ⌊r/Δr⌋ and add 2 to count[b] (count both i→j and j→i).
+3. ρ = N/L³ (N = 1000); shell volume V_shell = 4π r²·Δr at left edge r = b·Δr (not exact 4π/3[(r+Δr)³ − r³]).
+4. g(r) = count[b] / (N·ρ·V_shell); g(0) = 0.
 
 ### `/app/performance.txt`
 
