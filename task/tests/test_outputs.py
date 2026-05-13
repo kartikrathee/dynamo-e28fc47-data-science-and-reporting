@@ -231,7 +231,7 @@ def test_energy_conservation() -> None:
 
 
 def test_rerun_simulation_reproduces_step0_energy() -> None:
-    """Re-executing the compiled binary on particles.dat must reproduce step-0 energy."""
+    """Recompiling and re-running the submitted binary on particles.dat must reproduce step-0 energy."""
     submitted_total = float(_read_energy_rows()[0]["total"])
     backups = {
         name: (APP / name).read_bytes()
@@ -241,21 +241,21 @@ def test_rerun_simulation_reproduces_step0_energy() -> None:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
-            for name in ("simulation.cpp", "Makefile", "particles.dat"):
+            for name in ("simulation.cpp", "Makefile"):
                 shutil.copy2(APP / name, work / name)
             subprocess.run(["make"], cwd=work, check=True, capture_output=True, text=True)
             subprocess.run(
-                ["./simulation", "--steps", str(TOTAL_STEPS)],
-                cwd=work,
+                [str(work / "simulation"), "--steps", str(TOTAL_STEPS)],
+                cwd=APP,
                 check=True,
                 capture_output=True,
                 text=True,
                 env={**os.environ, "OMP_NUM_THREADS": str(OPENMP_THREADS)},
             )
-            with (work / "energy.log").open() as handle:
-                next(handle)
-                step0 = next(handle).strip().split()
-            assert math.isclose(float(step0[3]), submitted_total, rel_tol=RERUN_STEP0_RTOL)
+        with (APP / "energy.log").open() as handle:
+            next(handle)
+            step0 = next(handle).strip().split()
+        assert math.isclose(float(step0[3]), submitted_total, rel_tol=RERUN_STEP0_RTOL)
     finally:
         for name, data in backups.items():
             (APP / name).write_bytes(data)

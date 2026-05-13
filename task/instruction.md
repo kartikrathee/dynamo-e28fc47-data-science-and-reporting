@@ -9,7 +9,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Cutoff: rc = 2.5σ
 - Time step: dt = 0.0005
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
-- Trajectory: write `trajectory.xyz` every 10 steps (VMD-compatible XYZ; at `/app/trajectory.xyz` when run from `/app`)
+- Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
 - Initial conditions: generate `/app/particles.dat` as `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) with particle 0 at (0.5, 0.5, 0.5). At T = 1.0 (kB = m = 1), each velocity component is N(0, 1). Use `random.seed(42)` and stdlib Box-Muller only; two calls per particle. Each call returns `(z_cos, z_sin)` in that order; set vx, vy from the first call, vz from the second cos, discard the second sin.
 
@@ -28,8 +28,6 @@ Also create:
 - `/app/run_simulation.sh` (sets `OMP_NUM_THREADS=4`, builds and runs `/app/simulation --steps 500`)
 
 ### Simulation outputs
-
-In `simulation.cpp`, open outputs by **cwd-relative** names (`energy.log`, `timing.log`, `trajectory.xyz`) — not hardcoded `/app/...` paths. Run the binary from `/app` (e.g. `run_simulation.sh` must `cd /app` first) so files land at:
 
 - `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step with computed energies
 - `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
@@ -111,5 +109,5 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - No external libraries beyond the C++ standard library, OpenMP, and Python standard library for initial-condition generation
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
-- Run `/app/simulation` from `/app`; it must write `energy.log`, `timing.log`, and `trajectory.xyz` relative to cwd (see §2)
+- The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
 - Verification compares step-0/step-500 energies and RDF peaks to oracle reference values under `/tests/reference/` (not visible during the agent run). Gates: step-0 energy rtol 0.1%; step-500 total rtol 0.2%; RDF peaks ±5%; step-0 rerun rtol 0.01%
