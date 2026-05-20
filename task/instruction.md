@@ -11,7 +11,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
-- Initial conditions: generate `/app/particles.dat` as `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) with particle 0 at (0.5, 0.5, 0.5). At T = 1.0 (kB = m = 1), each velocity component is N(0, 1). Use `random.seed(42)` and stdlib Box-Muller only; two calls per particle. Each call returns `(z_cos, z_sin)` in that order; set vx, vy from the first call, vz from the second cos, discard the second sin.
+- Initial conditions: generate `/app/particles.dat` as `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) with particle 0 at (0.5, 0.5, 0.5). At T = 1.0 (kB = m = 1), each velocity component is N(0, 1). Use `random.seed(42)` and stdlib Box-Muller only; two calls per particle. Each call returns `(z_cos, z_sin)` in that order; set vx, vy from the first call, vz from the second cos, discard the second sin. On this lattice the minimum-image nearest-neighbor distance at t = 0 is 1.0; net COM velocity components must satisfy |vα| < 0.05.
 
 ## 2. C++ Simulation
 
@@ -29,7 +29,7 @@ Also create:
 
 ### Simulation outputs
 
-- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step with computed energies
+- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T = 2·KE/(3·N), step-250 total, and step-500 kinetic and potential separately against reference values.
 - `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
 
 ```
@@ -110,4 +110,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification compares step-0/step-500 energies and RDF peaks to oracle reference values under `/tests/reference/` (not visible during the agent run). Gates: step-0 energy rtol 0.1%; step-500 total rtol 0.2%; RDF peaks ±5%; step-0 rerun rtol 0.01%
+- Verification compares energies, RDF, and initial-geometry checks to oracle reference values under `/tests/reference/` (not visible during the agent run). Gates: step-0 energy and T rtol 0.1%; step-250 total and step-500 KE/PE/total rtol 0.2%; COM velocity |vα| < 0.05; t=0 minimum-image nearest-neighbor distance 1.0 ± 1e-4; g(0) = 0; RDF peaks ±5%; step-0 rerun rtol 0.01%

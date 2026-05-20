@@ -133,6 +133,60 @@ def _recompute_rdf(positions: list[tuple[float, float, float]]) -> dict[float, f
     return rdf
 
 
+def _read_particle_rows() -> list[dict[str, float | int]]:
+    rows: list[dict[str, float | int]] = []
+    for line in (APP / "particles.dat").read_text().splitlines():
+        pid, x, y, z, vx, vy, vz = line.split()
+        rows.append(
+            {
+                "id": int(pid),
+                "x": float(x),
+                "y": float(y),
+                "z": float(z),
+                "vx": float(vx),
+                "vy": float(vy),
+                "vz": float(vz),
+            }
+        )
+    return rows
+
+
+def _particle_positions(rows: list[dict[str, float | int]]) -> list[tuple[float, float, float]]:
+    return [(float(row["x"]), float(row["y"]), float(row["z"])) for row in rows]
+
+
+def _com_velocity(rows: list[dict[str, float | int]]) -> dict[str, float]:
+    n = len(rows)
+    return {
+        "vx": sum(float(row["vx"]) for row in rows) / n,
+        "vy": sum(float(row["vy"]) for row in rows) / n,
+        "vz": sum(float(row["vz"]) for row in rows) / n,
+    }
+
+
+def _min_pair_distance(positions: list[tuple[float, float, float]]) -> float:
+    min_r = float("inf")
+    for i, pos_i in enumerate(positions):
+        for j in range(i + 1, len(positions)):
+            pos_j = positions[j]
+            dx = _minimum_image(pos_i[0] - pos_j[0])
+            dy = _minimum_image(pos_i[1] - pos_j[1])
+            dz = _minimum_image(pos_i[2] - pos_j[2])
+            min_r = min(min_r, math.sqrt(dx * dx + dy * dy + dz * dz))
+    return min_r
+
+
+def _energy_row(step: int) -> dict[str, float | int]:
+    for row in _read_energy_rows():
+        if int(row["step"]) == step:
+            return row
+    raise AssertionError(f"energy.log missing step {step}")
+
+
+COM_VEL_ABS_TOL = 0.05
+MIN_PAIR_ABS_TOL = 1e-4
+
+
 def test_source_files_exist() -> None:
     """Required source artifacts must exist under /app and be non-empty."""
     required = ("simulation.cpp", "Makefile", "run_simulation.sh", "particles.dat")
@@ -228,6 +282,47 @@ def test_energy_conservation() -> None:
     rows = _read_energy_rows()
     drift = abs(float(rows[-1]["total"]) - float(rows[0]["total"])) / abs(float(rows[0]["total"]))
     assert drift < ENERGY_DRIFT_TOL
+
+
+def test_step0_temperature_matches_reference(reference: dict) -> None:
+    """Step-0 temperature T = 2·KE/(3N) must match the seeded Maxwell-Boltzmann reference."""
+    t0 = _temperature_from_ke(float(_energy_row(0)["ke"]))
+    assert math.isclose(t0, reference["step0_temperature"], rel_tol=REF_STEP0_RTOL)
+
+
+def test_rdf_origin_bin_is_zero(reference: dict) -> None:
+    """g(r) at r = 0 must be exactly zero under the instruction RDF convention."""
+    first = (APP / "rdf.dat").read_text().splitlines()[0].split()
+    assert float(first[0]) == 0.0
+    assert float(first[1]) == reference["rdf_g0"]
+
+
+def test_step250_total_energy_matches_reference(reference: dict) -> None:
+    """Step-250 total energy must match the reference mid-trajectory integrator state."""
+    total = float(_energy_row(250)["total"])
+    assert math.isclose(total, reference["step250"]["total"], rel_tol=REF_FINAL_RTOL)
+
+
+def test_step500_kinetic_and_potential_match_reference(reference: dict) -> None:
+    """Step-500 kinetic and potential energies must each match the reference trajectory."""
+    row = _energy_row(500)
+    ref = reference["step500"]
+    assert math.isclose(float(row["ke"]), ref["kinetic"], rel_tol=REF_FINAL_RTOL)
+    assert math.isclose(float(row["pe"]), ref["potential"], rel_tol=REF_FINAL_RTOL)
+
+
+def test_initial_com_velocity_near_zero(reference: dict) -> None:
+    """Seed-42 Maxwell-Boltzmann draws must leave net center-of-mass velocity near zero."""
+    com = _com_velocity(_read_particle_rows())
+    for axis in ("vx", "vy", "vz"):
+        assert abs(com[axis]) < COM_VEL_ABS_TOL
+        assert math.isclose(com[axis], reference["com_velocity"][axis], abs_tol=COM_VEL_ABS_TOL)
+
+
+def test_initial_minimum_image_pair_distance(reference: dict) -> None:
+    """Minimum-image nearest-neighbor spacing on the seed lattice at t = 0 must be 1.0."""
+    min_r = _min_pair_distance(_particle_positions(_read_particle_rows()))
+    assert math.isclose(min_r, reference["min_pair_distance"], abs_tol=MIN_PAIR_ABS_TOL)
 
 
 def test_rerun_simulation_reproduces_step0_energy() -> None:
