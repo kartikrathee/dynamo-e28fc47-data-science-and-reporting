@@ -32,9 +32,29 @@ REF_FINAL_RTOL = 2e-3
 RERUN_STEP0_RTOL = 1e-4
 
 
+_REQUIRED_REFERENCE_KEYS = (
+    "particle0",
+    "step0",
+    "step0_temperature",
+    "step250",
+    "step500",
+    "com_velocity",
+    "min_pair_distance",
+    "rdf_g0",
+    "rdf_peaks",
+)
+
+
 @pytest.fixture(scope="session")
 def reference() -> dict:
-    return json.loads(REFERENCE_PATH.read_text())
+    assert REFERENCE_PATH.is_file(), (
+        f"Missing verifier ground truth at {REFERENCE_PATH}. "
+        "Ensure tests/reference/expected.json is shipped with the tests/ overlay."
+    )
+    data = json.loads(REFERENCE_PATH.read_text())
+    missing = [key for key in _REQUIRED_REFERENCE_KEYS if key not in data]
+    assert missing == [], f"expected.json missing keys: {missing}"
+    return data
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -187,11 +207,19 @@ COM_VEL_ABS_TOL = 0.05
 MIN_PAIR_ABS_TOL = 1e-4
 
 
+def _missing_or_empty(names: tuple[str, ...]) -> list[str]:
+    missing: list[str] = []
+    for name in names:
+        path = APP / name
+        if not path.is_file() or path.stat().st_size == 0:
+            missing.append(name)
+    return missing
+
+
 def test_source_files_exist() -> None:
     """Required source artifacts must exist under /app and be non-empty."""
     required = ("simulation.cpp", "Makefile", "run_simulation.sh", "particles.dat")
-    missing = [name for name in required if not (APP / name).exists()]
-    assert missing == []
+    assert _missing_or_empty(required) == []
 
 
 def test_particles_lattice_seed(reference: dict) -> None:
@@ -205,23 +233,31 @@ def test_particles_lattice_seed(reference: dict) -> None:
     assert math.isclose(z, ref["z"], abs_tol=1e-5)
 
 
-def test_simulation_uses_openmp() -> None:
-    """The C++ simulator must include OpenMP pragmas and headers."""
-    content = (APP / "simulation.cpp").read_text()
-    assert "#pragma omp" in content and ("omp.h" in content or "_OPENMP" in content)
+def _simulation_binary() -> Path:
+    binary = APP / "simulation"
+    if not binary.is_file():
+        subprocess.run(["make"], cwd=APP, check=True, capture_output=True, text=True)
+    assert binary.is_file() and binary.stat().st_size > 0
+    return binary
 
 
-def test_makefile_supports_openmp() -> None:
-    """The Makefile must compile with -fopenmp."""
-    assert "fopenmp" in (APP / "Makefile").read_text()
+def test_simulation_binary_links_openmp() -> None:
+    """The compiled simulator must be linked against libgomp (OpenMP runtime)."""
+    binary = _simulation_binary()
+    ldd = subprocess.run(
+        ["ldd", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "libgomp" in ldd.stdout.lower(), "simulation binary is not linked with OpenMP"
 
 
-def test_run_script_matches_instruction() -> None:
-    """run_simulation.sh must set OMP_NUM_THREADS=4 and run /app/simulation --steps 500."""
-    content = (APP / "run_simulation.sh").read_text()
-    assert "OMP_NUM_THREADS=4" in content
-    assert "/app/simulation" in content
-    assert "--steps 500" in content
+def test_run_script_is_executable_bash() -> None:
+    """run_simulation.sh must be a valid, executable bash entrypoint."""
+    script = APP / "run_simulation.sh"
+    assert script.is_file() and os.access(script, os.X_OK)
+    subprocess.run(["bash", "-n", str(script)], check=True, capture_output=True, text=True)
 
 
 def test_output_files_exist() -> None:
@@ -236,8 +272,7 @@ def test_output_files_exist() -> None:
         "scaling.txt",
         "summary.json",
     )
-    missing = [name for name in required if not (APP / name).exists()]
-    assert missing == []
+    assert _missing_or_empty(required) == []
 
 
 def test_trajectory_format() -> None:
