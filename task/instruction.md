@@ -29,7 +29,7 @@ Also create:
 
 ### Simulation outputs
 
-- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T, step-250 total, and step-500 KE/PE against reference values.
+- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T, step-100/250/400 total, and step-500 KE/PE against reference values.
 - `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
 
 ```
@@ -110,4 +110,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 energy/T rtol 0.1%; step-250 total and step-500 KE/PE/total rtol 0.2%; energy drift <5%; |COM vα| < 0.05; t=0 nearest-neighbor distance 1.0 ± 1e-4; g(0)=0; RDF peaks ±5%; step-0 rerun rtol 0.01%
+- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 energy/T rtol 0.05%; step-100/250/400 total and step-500 KE/PE/total rtol 0.05%; energy drift <5%; |COM vα| < 0.05; t=0 nearest-neighbor distance 1.0 ± 1e-4; g(0)=0; RDF peaks ±2%; step-0 rerun rtol 0.005%

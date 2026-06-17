@@ -27,16 +27,22 @@ OPENMP_THREADS = 4
 ENERGY_DRIFT_TOL = 0.05
 RDF_BIN_WIDTH = 0.1
 RDF_MAX_R = 5.0
-REF_STEP0_RTOL = 1e-3
-REF_FINAL_RTOL = 2e-3
-RERUN_STEP0_RTOL = 1e-4
+REF_STEP0_RTOL = 5e-4
+REF_FINAL_RTOL = 5e-4
+RERUN_STEP0_RTOL = 5e-5
+RDF_RTOL = 0.02
+RDF_ABS_TOL = 0.01
+DERIVED_RTOL = 5e-4
+PERFORMANCE_RTOL = 0.02
 
 
 _REQUIRED_REFERENCE_KEYS = (
     "particle0",
     "step0",
     "step0_temperature",
+    "step100",
     "step250",
+    "step400",
     "step500",
     "com_velocity",
     "min_pair_distance",
@@ -204,6 +210,7 @@ def _energy_row(step: int) -> dict[str, float | int]:
 
 
 COM_VEL_ABS_TOL = 0.05
+COM_VEL_REF_ABS_TOL = 1e-3
 MIN_PAIR_ABS_TOL = 1e-4
 
 
@@ -291,7 +298,7 @@ def test_energy_log_total_matches_components() -> None:
     """Each energy row must satisfy total = kinetic + potential."""
     rows = _read_energy_rows()
     assert all(
-        math.isclose(float(row["total"]), float(row["ke"]) + float(row["pe"]), rel_tol=1e-4, abs_tol=0.05)
+        math.isclose(float(row["total"]), float(row["ke"]) + float(row["pe"]), rel_tol=1e-6, abs_tol=1e-4)
         for row in rows
     )
 
@@ -332,10 +339,22 @@ def test_rdf_origin_bin_is_zero(reference: dict) -> None:
     assert float(first[1]) == reference["rdf_g0"]
 
 
+def test_step100_total_energy_matches_reference(reference: dict) -> None:
+    """Step-100 total energy must match the reference integrator trajectory."""
+    total = float(_energy_row(100)["total"])
+    assert math.isclose(total, reference["step100"]["total"], rel_tol=REF_FINAL_RTOL)
+
+
 def test_step250_total_energy_matches_reference(reference: dict) -> None:
     """Step-250 total energy must match the reference mid-trajectory integrator state."""
     total = float(_energy_row(250)["total"])
     assert math.isclose(total, reference["step250"]["total"], rel_tol=REF_FINAL_RTOL)
+
+
+def test_step400_total_energy_matches_reference(reference: dict) -> None:
+    """Step-400 total energy must match the reference integrator trajectory."""
+    total = float(_energy_row(400)["total"])
+    assert math.isclose(total, reference["step400"]["total"], rel_tol=REF_FINAL_RTOL)
 
 
 def test_step500_kinetic_and_potential_match_reference(reference: dict) -> None:
@@ -351,7 +370,7 @@ def test_initial_com_velocity_near_zero(reference: dict) -> None:
     com = _com_velocity(_read_particle_rows())
     for axis in ("vx", "vy", "vz"):
         assert abs(com[axis]) < COM_VEL_ABS_TOL
-        assert math.isclose(com[axis], reference["com_velocity"][axis], abs_tol=COM_VEL_ABS_TOL)
+        assert math.isclose(com[axis], reference["com_velocity"][axis], abs_tol=COM_VEL_REF_ABS_TOL)
 
 
 def test_initial_minimum_image_pair_distance(reference: dict) -> None:
@@ -396,10 +415,10 @@ def test_temperature_stats_match_energy_log() -> None:
     rows = _read_energy_rows()
     temps = [_temperature_from_ke(float(row["ke"])) for row in rows]
     stats = _parse_temperature_stats()
-    assert math.isclose(stats["Mean"], sum(temps) / len(temps), rel_tol=1e-3)
-    assert math.isclose(stats["Std Dev"], statistics.pstdev(temps), rel_tol=1e-3)
-    assert math.isclose(stats["Min"], min(temps), rel_tol=1e-3)
-    assert math.isclose(stats["Max"], max(temps), rel_tol=1e-3)
+    assert math.isclose(stats["Mean"], sum(temps) / len(temps), rel_tol=DERIVED_RTOL)
+    assert math.isclose(stats["Std Dev"], statistics.pstdev(temps), rel_tol=DERIVED_RTOL)
+    assert math.isclose(stats["Min"], min(temps), rel_tol=DERIVED_RTOL)
+    assert math.isclose(stats["Max"], max(temps), rel_tol=DERIVED_RTOL)
 
 
 def test_rdf_matches_trajectory() -> None:
@@ -412,7 +431,7 @@ def test_rdf_matches_trajectory() -> None:
         assert len(parts) == 2
         r_val, gr_val = map(float, parts)
         if r_val in expected:
-            assert math.isclose(gr_val, expected[r_val], rel_tol=0.05, abs_tol=0.05)
+            assert math.isclose(gr_val, expected[r_val], rel_tol=RDF_RTOL, abs_tol=RDF_ABS_TOL)
 
 
 def test_rdf_peaks_match_reference(reference: dict) -> None:
@@ -420,7 +439,7 @@ def test_rdf_peaks_match_reference(reference: dict) -> None:
     lines = {float(line.split()[0]): float(line.split()[1]) for line in (APP / "rdf.dat").read_text().splitlines() if line.strip()}
     for r_str, ref_gr in reference["rdf_peaks"].items():
         r_val = float(r_str)
-        assert math.isclose(lines[r_val], ref_gr, rel_tol=0.05, abs_tol=0.05)
+        assert math.isclose(lines[r_val], ref_gr, rel_tol=RDF_RTOL, abs_tol=RDF_ABS_TOL)
 
 
 def test_performance_formulas() -> None:
@@ -444,11 +463,11 @@ def test_performance_formulas() -> None:
     expected_eff = min((force_time + integ_time) / total_time, 1.0)
     assert reported_total > 0 and reported_force > 0 and reported_integ > 0
     assert reported_pps > 0 and reported_eff > 0
-    assert math.isclose(reported_total, total_time, rel_tol=1e-3)
-    assert math.isclose(reported_force, force_time, rel_tol=1e-3)
-    assert math.isclose(reported_integ, integ_time, rel_tol=1e-3)
-    assert math.isclose(reported_pps, expected_pps, rel_tol=0.05)
-    assert math.isclose(reported_eff, expected_eff, rel_tol=0.05)
+    assert math.isclose(reported_total, total_time, rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported_force, force_time, rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported_integ, integ_time, rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported_pps, expected_pps, rel_tol=PERFORMANCE_RTOL)
+    assert math.isclose(reported_eff, expected_eff, rel_tol=PERFORMANCE_RTOL)
 
 
 def test_scaling_report() -> None:
@@ -463,7 +482,7 @@ def test_scaling_report() -> None:
     serial = float(re.search(r"Serial runtime \(1 thread\):\s*([0-9.]+)", content).group(1))
     speedup = float(re.search(r"Speedup:\s*([0-9.]+)", content).group(1))
     assert parallel > 0 and serial > 0 and speedup > 0
-    assert math.isclose(speedup, serial / parallel, rel_tol=0.05)
+    assert math.isclose(speedup, serial / parallel, rel_tol=PERFORMANCE_RTOL)
 
 
 def test_summary_json_fields() -> None:
@@ -481,10 +500,10 @@ def test_summary_json_fields() -> None:
     stats = _parse_temperature_stats()
     perf_eff = float(re.search(r"Parallel Efficiency:\s*([0-9.]+)", (APP / "performance.txt").read_text()).group(1))
     assert summary["validation_status"] == ("PASS" if drift < ENERGY_DRIFT_TOL else "FAIL")
-    assert math.isclose(summary["energy_conservation"], drift, rel_tol=1e-3)
-    assert math.isclose(summary["mean_temperature"], stats["Mean"], rel_tol=1e-3)
-    assert math.isclose(summary["parallel_efficiency"], perf_eff, rel_tol=1e-3)
-    assert math.isclose(summary["final_total_energy"], float(rows[-1]["total"]), rel_tol=1e-3)
+    assert math.isclose(summary["energy_conservation"], drift, rel_tol=DERIVED_RTOL)
+    assert math.isclose(summary["mean_temperature"], stats["Mean"], rel_tol=DERIVED_RTOL)
+    assert math.isclose(summary["parallel_efficiency"], perf_eff, rel_tol=DERIVED_RTOL)
+    assert math.isclose(summary["final_total_energy"], float(rows[-1]["total"]), rel_tol=DERIVED_RTOL)
 
 
 def test_simulation_compiles() -> None:
@@ -538,4 +557,4 @@ def test_scaling_parallel_runtime_matches_parallel_timing() -> None:
             (APP / "scaling.txt").read_text(),
         ).group(1)
     )
-    assert math.isclose(scaling_parallel, timing_total, rel_tol=1e-3)
+    assert math.isclose(scaling_parallel, timing_total, rel_tol=DERIVED_RTOL)
