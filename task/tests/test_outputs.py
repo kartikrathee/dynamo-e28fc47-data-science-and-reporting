@@ -38,12 +38,16 @@ PERFORMANCE_RTOL = 0.02
 
 _REQUIRED_REFERENCE_KEYS = (
     "particle0",
+    "particle999",
     "step0",
     "step0_temperature",
+    "step1",
     "step100",
     "step250",
     "step400",
     "step500",
+    "particle0_step250",
+    "particle0_step500",
     "com_velocity",
     "min_pair_distance",
     "rdf_g0",
@@ -209,9 +213,8 @@ def _energy_row(step: int) -> dict[str, float | int]:
     raise AssertionError(f"energy.log missing step {step}")
 
 
-COM_VEL_ABS_TOL = 0.05
-COM_VEL_REF_ABS_TOL = 1e-3
-MIN_PAIR_ABS_TOL = 1e-4
+TRAJ_POS_ABS_TOL = 1e-4
+IC_VEL_ABS_TOL = 1e-5
 
 
 def _missing_or_empty(names: tuple[str, ...]) -> list[str]:
@@ -221,6 +224,26 @@ def _missing_or_empty(names: tuple[str, ...]) -> list[str]:
         if not path.is_file() or path.stat().st_size == 0:
             missing.append(name)
     return missing
+
+
+def _particle_row(particle_id: int) -> dict[str, float | int]:
+    for row in _read_particle_rows():
+        if int(row["id"]) == particle_id:
+            return row
+    raise AssertionError(f"particles.dat missing particle {particle_id}")
+
+
+def _trajectory_particle_position(step: int, particle_id: int = 0) -> tuple[float, float, float]:
+    lines = (APP / "trajectory.xyz").read_text().splitlines()
+    lines_per_frame = N_PARTICLES + 2
+    frame_start = (step // TRAJECTORY_INTERVAL) * lines_per_frame
+    line = lines[frame_start + 2 + particle_id].split()
+    return float(line[1]), float(line[2]), float(line[3])
+
+
+COM_VEL_ABS_TOL = 0.05
+COM_VEL_REF_ABS_TOL = 1e-3
+MIN_PAIR_ABS_TOL = 1e-4
 
 
 def test_source_files_exist() -> None:
@@ -238,6 +261,22 @@ def test_particles_lattice_seed(reference: dict) -> None:
     assert math.isclose(x, ref["x"], abs_tol=1e-5)
     assert math.isclose(y, ref["y"], abs_tol=1e-5)
     assert math.isclose(z, ref["z"], abs_tol=1e-5)
+
+
+def test_particle0_velocity_matches_reference(reference: dict) -> None:
+    """Particle 0 Maxwell-Boltzmann draws must match the seed-42 reference velocities."""
+    row = _particle_row(0)
+    ref = reference["particle0"]
+    for axis in ("vx", "vy", "vz"):
+        assert math.isclose(float(row[axis]), ref[axis], abs_tol=IC_VEL_ABS_TOL)
+
+
+def test_particle999_lattice_and_velocity_match_reference(reference: dict) -> None:
+    """Corner particle 999 must sit on the far lattice site with reference seed-42 velocities."""
+    row = _particle_row(999)
+    ref = reference["particle999"]
+    for axis in ("x", "y", "z", "vx", "vy", "vz"):
+        assert math.isclose(float(row[axis]), ref[axis], abs_tol=IC_VEL_ABS_TOL)
 
 
 def _simulation_binary() -> Path:
@@ -339,6 +378,12 @@ def test_rdf_origin_bin_is_zero(reference: dict) -> None:
     assert float(first[1]) == reference["rdf_g0"]
 
 
+def test_step1_total_energy_matches_reference(reference: dict) -> None:
+    """Step-1 total energy must match the reference after the first Velocity-Verlet advance."""
+    total = float(_energy_row(1)["total"])
+    assert math.isclose(total, reference["step1"]["total"], rel_tol=REF_FINAL_RTOL)
+
+
 def test_step100_total_energy_matches_reference(reference: dict) -> None:
     """Step-100 total energy must match the reference integrator trajectory."""
     total = float(_energy_row(100)["total"])
@@ -349,6 +394,14 @@ def test_step250_total_energy_matches_reference(reference: dict) -> None:
     """Step-250 total energy must match the reference mid-trajectory integrator state."""
     total = float(_energy_row(250)["total"])
     assert math.isclose(total, reference["step250"]["total"], rel_tol=REF_FINAL_RTOL)
+
+
+def test_step250_kinetic_and_potential_match_reference(reference: dict) -> None:
+    """Step-250 kinetic and potential energies must each match the reference trajectory."""
+    row = _energy_row(250)
+    ref = reference["step250"]
+    assert math.isclose(float(row["ke"]), ref["kinetic"], rel_tol=REF_FINAL_RTOL)
+    assert math.isclose(float(row["pe"]), ref["potential"], rel_tol=REF_FINAL_RTOL)
 
 
 def test_step400_total_energy_matches_reference(reference: dict) -> None:
@@ -365,6 +418,24 @@ def test_step500_kinetic_and_potential_match_reference(reference: dict) -> None:
     assert math.isclose(float(row["pe"]), ref["potential"], rel_tol=REF_FINAL_RTOL)
 
 
+def test_particle0_step250_position_matches_trajectory(reference: dict) -> None:
+    """Particle 0 coordinates at step 250 in trajectory.xyz must match the reference integrator."""
+    x, y, z = _trajectory_particle_position(250, 0)
+    ref = reference["particle0_step250"]
+    assert math.isclose(x, ref["x"], abs_tol=TRAJ_POS_ABS_TOL)
+    assert math.isclose(y, ref["y"], abs_tol=TRAJ_POS_ABS_TOL)
+    assert math.isclose(z, ref["z"], abs_tol=TRAJ_POS_ABS_TOL)
+
+
+def test_particle0_step500_position_matches_trajectory(reference: dict) -> None:
+    """Particle 0 coordinates at step 500 in trajectory.xyz must match the reference integrator."""
+    x, y, z = _trajectory_particle_position(500, 0)
+    ref = reference["particle0_step500"]
+    assert math.isclose(x, ref["x"], abs_tol=TRAJ_POS_ABS_TOL)
+    assert math.isclose(y, ref["y"], abs_tol=TRAJ_POS_ABS_TOL)
+    assert math.isclose(z, ref["z"], abs_tol=TRAJ_POS_ABS_TOL)
+
+
 def test_initial_com_velocity_near_zero(reference: dict) -> None:
     """Seed-42 Maxwell-Boltzmann draws must leave net center-of-mass velocity near zero."""
     com = _com_velocity(_read_particle_rows())
@@ -379,9 +450,10 @@ def test_initial_minimum_image_pair_distance(reference: dict) -> None:
     assert math.isclose(min_r, reference["min_pair_distance"], abs_tol=MIN_PAIR_ABS_TOL)
 
 
-def test_rerun_simulation_reproduces_step0_energy() -> None:
-    """Recompiling and re-running the submitted binary on particles.dat must reproduce step-0 energy."""
-    submitted_total = float(_read_energy_rows()[0]["total"])
+def test_rerun_simulation_reproduces_step0_and_step250_energy() -> None:
+    """Recompiling and re-running the submitted binary must reproduce step-0 and step-250 totals."""
+    submitted_step0 = float(_read_energy_rows()[0]["total"])
+    submitted_step250 = float(_energy_row(250)["total"])
     backups = {
         name: (APP / name).read_bytes()
         for name in ("energy.log", "timing.log", "trajectory.xyz")
@@ -401,10 +473,9 @@ def test_rerun_simulation_reproduces_step0_energy() -> None:
                 text=True,
                 env={**os.environ, "OMP_NUM_THREADS": str(OPENMP_THREADS)},
             )
-        with (APP / "energy.log").open() as handle:
-            next(handle)
-            step0 = next(handle).strip().split()
-        assert math.isclose(float(step0[3]), submitted_total, rel_tol=RERUN_STEP0_RTOL)
+        rows = _read_energy_rows()
+        assert math.isclose(float(rows[0]["total"]), submitted_step0, rel_tol=RERUN_STEP0_RTOL)
+        assert math.isclose(float(_energy_row(250)["total"]), submitted_step250, rel_tol=REF_FINAL_RTOL)
     finally:
         for name, data in backups.items():
             (APP / name).write_bytes(data)
@@ -546,6 +617,14 @@ def test_timing_log_reports_force_integration_and_total() -> None:
     """timing.log must use the three labeled lines specified in instruction §2."""
     timing = _parse_timing_log()
     assert timing["force"] > 0 and timing["integration"] > 0 and timing["total"] > 0
+
+
+def test_serial_runtime_exceeds_parallel_runtime() -> None:
+    """scaling.txt must report a serial timing run slower than the parallel production run."""
+    content = (APP / "scaling.txt").read_text()
+    parallel = float(re.search(r"Parallel runtime \(4 threads\):\s*([0-9.]+)", content).group(1))
+    serial = float(re.search(r"Serial runtime \(1 thread\):\s*([0-9.]+)", content).group(1))
+    assert serial > parallel
 
 
 def test_scaling_parallel_runtime_matches_parallel_timing() -> None:

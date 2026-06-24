@@ -11,7 +11,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
-- Initial conditions: generate `/app/particles.dat` as `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) with particle 0 at (0.5, 0.5, 0.5). At T = 1.0 (kB = m = 1), each velocity component is N(0, 1). Use `random.seed(42)` and stdlib Box-Muller only; two calls per particle. Each call returns `(z_cos, z_sin)` in that order; set vx, vy from the first call, vz from the second cos, discard the second sin. Minimum-image nearest-neighbor distance at t=0 is 1.0; |COM vα| < 0.05.
+- Initial conditions: generate `/app/particles.dat` as `id x y z vx vy vz`. Place particles on a 10×10×10 cubic lattice (spacing 1.0) with particle 0 at (0.5, 0.5, 0.5). At T = 1.0 (kB = m = 1), draw Maxwell-Boltzmann velocity components with `random.seed(42)` and stdlib Box-Muller only (two calls per particle). The exact four-normal-to-(vx, vy, vz) assignment is verified against hidden reference at step 0.
 
 ## 2. C++ Simulation
 
@@ -29,7 +29,7 @@ Also create:
 
 ### Simulation outputs
 
-- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T, step-100/250/400 total, and step-500 KE/PE against reference values.
+- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T, step-1/100/250/400 total, step-250 KE/PE, and step-500 KE/PE against reference values.
 - `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
 
 ```
@@ -110,4 +110,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 energy/T rtol 0.05%; step-100/250/400 total and step-500 KE/PE/total rtol 0.05%; energy drift <5%; |COM vα| < 0.05; t=0 nearest-neighbor distance 1.0 ± 1e-4; g(0)=0; RDF peaks ±2%; step-0 rerun rtol 0.005%
+- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 energy/T and particle-0/999 IC rtol 0.05%; step-1/100/250/400 total and step-250/500 KE/PE/total rtol 0.05%; step-250/500 particle-0 XYZ in trajectory ±1e-4; energy drift <5%; |COM vα| < 0.05; t=0 nearest-neighbor distance 1.0 ± 1e-4; g(0)=0; RDF peaks ±2%; step-0/250 rerun rtol 0.005%; serial runtime > parallel runtime
