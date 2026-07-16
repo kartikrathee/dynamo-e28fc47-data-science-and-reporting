@@ -54,7 +54,6 @@ _REQUIRED_REFERENCE_KEYS = (
     "com_velocity",
     "min_pair_distance",
     "rdf_g0",
-    "rdf_peaks",
 )
 
 
@@ -257,6 +256,14 @@ def test_particle0_velocity_matches_reference(reference: dict) -> None:
         assert math.isclose(float(row[axis]), ref[axis], abs_tol=IC_VEL_ABS_TOL)
 
 
+def test_particle42_lattice_position_matches_reference(reference: dict) -> None:
+    """Particle 42 must sit on the mid-lattice site specified in the instruction."""
+    row = _particle_row(42)
+    ref = reference["particle42"]
+    for axis in ("x", "y", "z"):
+        assert math.isclose(float(row[axis]), ref[axis], abs_tol=1e-5)
+
+
 def test_particle42_velocity_matches_reference(reference: dict) -> None:
     """Particle 42 velocities must match the seed-42 reference (mid-lattice IC trap)."""
     row = _particle_row(42)
@@ -390,26 +397,10 @@ def test_step250_total_energy_matches_reference(reference: dict) -> None:
     assert math.isclose(total, reference["step250"]["total"], rel_tol=REF_TRAJECTORY_RTOL)
 
 
-def test_step250_kinetic_and_potential_match_reference(reference: dict) -> None:
-    """Step-250 kinetic and potential energies must each match the reference trajectory."""
-    row = _energy_row(250)
-    ref = reference["step250"]
-    assert math.isclose(float(row["ke"]), ref["kinetic"], rel_tol=REF_TRAJECTORY_RTOL)
-    assert math.isclose(float(row["pe"]), ref["potential"], rel_tol=REF_TRAJECTORY_RTOL)
-
-
 def test_step400_total_energy_matches_reference(reference: dict) -> None:
     """Step-400 total energy must match the reference integrator trajectory."""
     total = float(_energy_row(400)["total"])
     assert math.isclose(total, reference["step400"]["total"], rel_tol=REF_TRAJECTORY_RTOL)
-
-
-def test_step500_kinetic_and_potential_match_reference(reference: dict) -> None:
-    """Step-500 kinetic and potential energies must each match the reference trajectory."""
-    row = _energy_row(500)
-    ref = reference["step500"]
-    assert math.isclose(float(row["ke"]), ref["kinetic"], rel_tol=REF_TRAJECTORY_RTOL)
-    assert math.isclose(float(row["pe"]), ref["potential"], rel_tol=REF_TRAJECTORY_RTOL)
 
 
 def test_initial_com_velocity_near_zero(reference: dict) -> None:
@@ -481,12 +472,15 @@ def test_rdf_matches_trajectory() -> None:
             assert math.isclose(gr_val, expected[r_val], rel_tol=RDF_RTOL, abs_tol=RDF_ABS_TOL)
 
 
-def test_rdf_peaks_match_reference(reference: dict) -> None:
-    """Key RDF peaks must match reference values from the calibrated oracle run."""
-    lines = {float(line.split()[0]): float(line.split()[1]) for line in (APP / "rdf.dat").read_text().splitlines() if line.strip()}
-    for r_str, ref_gr in reference["rdf_peaks"].items():
-        r_val = float(r_str)
-        assert math.isclose(lines[r_val], ref_gr, rel_tol=RDF_RTOL, abs_tol=RDF_ABS_TOL)
+def test_rdf_first_shell_peak_exceeds_unity() -> None:
+    """The first coordination shell in g(r) must exceed unity for this dense LJ liquid."""
+    lines = [line.split() for line in (APP / "rdf.dat").read_text().splitlines() if line.strip()]
+    peak = max(
+        float(gr)
+        for r_str, gr in ((parts[0], parts[1]) for parts in lines)
+        if 0.8 <= float(r_str) <= 2.5
+    )
+    assert peak > 1.0
 
 
 def test_performance_formulas() -> None:

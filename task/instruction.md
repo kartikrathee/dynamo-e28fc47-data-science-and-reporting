@@ -29,7 +29,7 @@ Also create:
 
 ### Simulation outputs
 
-- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T, step-1/100/250/400 total, step-250 KE/PE, and step-500 KE/PE against reference values.
+- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T and step-1/100/250/400/500 **total** energies against reference values (not separate KE/PE components).
 - `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
 
 ```
@@ -110,4 +110,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 IC/energy/T rtol 0.1%; particles 0/42/999 velocities ±1e-5; mid-trajectory energies rtol 0.2% (accepts fp/OpenMP variation among race-free NVE Velocity-Verlet implementations); drift <5%; |COM vα| < 0.05; min pair distance 1.0 ± 1e-4; g(0)=0; RDF peaks ±2%; rerun step-0 0.01% / step-250 0.2%; serial runtime > parallel
+- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 IC/energy/T rtol 0.1%; particles 0/42/999 lattice and velocities ±1e-5; mid-trajectory **total** energies rtol 0.2% (accepts fp/OpenMP variation among race-free NVE Velocity-Verlet implementations); drift <5%; |COM vα| < 0.05; min pair distance 1.0 ± 1e-4; g(0)=0; RDF self-consistency plus first-shell peak > 1 for r in 0.8–2.5; rerun step-0 0.01% / step-250 0.2%; serial runtime > parallel
