@@ -515,10 +515,12 @@ def test_scaling_report() -> None:
     """scaling.txt must use the instruction labels and report speedup as serial / parallel."""
     content = (APP / "scaling.txt").read_text()
     lines = [line.strip() for line in content.splitlines() if line.strip()]
-    assert len(lines) == 3
+    assert len(lines) == 5
     assert lines[0].startswith("Parallel runtime (4 threads):")
     assert lines[1].startswith("Serial runtime (1 thread):")
-    assert lines[2].startswith("Speedup:")
+    assert lines[2].startswith("Parallel force time (4 threads):")
+    assert lines[3].startswith("Serial force time (1 thread):")
+    assert lines[4].startswith("Speedup:")
     parallel = float(re.search(r"Parallel runtime \(4 threads\):\s*([0-9.]+)", content).group(1))
     serial = float(re.search(r"Serial runtime \(1 thread\):\s*([0-9.]+)", content).group(1))
     speedup = float(re.search(r"Speedup:\s*([0-9.]+)", content).group(1))
@@ -548,10 +550,27 @@ def test_summary_json_fields() -> None:
 
 
 def test_simulation_compiles() -> None:
-    """Submitted artifacts must compile cleanly with make."""
-    subprocess.run(["make", "clean"], cwd=APP, check=False, capture_output=True)
-    result = subprocess.run(["make"], cwd=APP, capture_output=True, text=True)
-    assert result.returncode == 0
+    """Submitted Makefile and simulation.cpp must compile cleanly in isolation."""
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        shutil.copy2(APP / "simulation.cpp", work / "simulation.cpp")
+        shutil.copy2(APP / "Makefile", work / "Makefile")
+        subprocess.run(["make", "clean"], cwd=work, check=False, capture_output=True)
+        result = subprocess.run(["make"], cwd=work, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_simulation_source_has_no_artificial_delays() -> None:
+    """simulation.cpp must not inject sleeps or env-based runtime padding."""
+    source = (APP / "simulation.cpp").read_text()
+    forbidden = (
+        r"sleep_for",
+        r"\busleep\s*\(",
+        r"\bnanosleep\s*\(",
+        r"SIM_MIN_TOTAL_RUNTIME",
+    )
+    for pattern in forbidden:
+        assert re.search(pattern, source) is None, f"Forbidden timing manipulation: {pattern}"
 
 
 def test_energy_log_tsv_header() -> None:
@@ -589,12 +608,15 @@ def test_timing_log_reports_force_integration_and_total() -> None:
     assert timing["force"] > 0 and timing["integration"] > 0 and timing["total"] > 0
 
 
-def test_serial_runtime_exceeds_parallel_runtime() -> None:
-    """scaling.txt must report a serial timing run slower than the parallel production run."""
+def test_parallel_force_time_faster_than_serial() -> None:
+    """Parallel OpenMP force time must beat the supplemental serial force time."""
     content = (APP / "scaling.txt").read_text()
-    parallel = float(re.search(r"Parallel runtime \(4 threads\):\s*([0-9.]+)", content).group(1))
-    serial = float(re.search(r"Serial runtime \(1 thread\):\s*([0-9.]+)", content).group(1))
-    assert serial > parallel
+    parallel_force = float(
+        re.search(r"Parallel force time \(4 threads\):\s*([0-9.]+)", content).group(1)
+    )
+    serial_force = float(re.search(r"Serial force time \(1 thread\):\s*([0-9.]+)", content).group(1))
+    assert parallel_force > 0 and serial_force > 0
+    assert parallel_force < serial_force
 
 
 def test_scaling_parallel_runtime_matches_parallel_timing() -> None:

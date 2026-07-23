@@ -24,7 +24,7 @@ Implement a periodic-boundary NVE simulation in `/app/simulation.cpp` with:
 
 Also create:
 
-- `/app/Makefile` (must compile with `-fopenmp`)
+- `/app/Makefile` (must compile with `-fopenmp`; `clean` removes only `simulation` and `*.o`, not logs or analysis outputs)
 - `/app/run_simulation.sh` (sets `OMP_NUM_THREADS=4`, builds and runs `/app/simulation --steps 500`)
 
 ### Simulation outputs
@@ -85,8 +85,12 @@ After the parallel run, execute one additional serial timing run with `OMP_NUM_T
 ```
 Parallel runtime (4 threads): <total runtime from the parallel run> s
 Serial runtime (1 thread): <total runtime from the serial run> s
+Parallel force time (4 threads): <force time from the parallel timing.log> s
+Serial force time (1 thread): <force time from the serial timing run> s
 Speedup: <serial_runtime / parallel_runtime>
 ```
+
+Parallel force time must be less than serial force time (measured wall-clock; no artificial delays).
 
 ### `/app/summary.json`
 
@@ -110,4 +114,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 IC/energy/T rtol 0.1%; particles 0/42/999 lattice and velocities ±1e-5; mid-trajectory **total** energies rtol 0.2% (accepts fp/OpenMP variation among race-free NVE Velocity-Verlet implementations); drift <5%; |COM vα| < 0.05; min pair distance 1.0 ± 1e-4; g(0)=0; RDF self-consistency plus first-shell peak > 1 for r in 0.8–2.5; rerun step-0 0.01% / step-250 0.2%; serial runtime > parallel
+- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 IC/energy/T rtol 0.1%; particles 0/42/999 lattice and velocities ±1e-5; mid-trajectory **total** energies rtol 0.2%; drift <5%; |COM vα| < 0.05; min pair distance 1.0 ± 1e-4; g(0)=0; RDF self-consistency plus first-shell peak > 1 for r in 0.8–2.5; rerun step-0 0.01% / step-250 0.2%; parallel force time < serial force time; no `sleep`/timing padding in `simulation.cpp`
