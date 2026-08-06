@@ -1,6 +1,6 @@
 You are inside a Linux container. Your working directory is `/app`.
 
-Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-process with Unix tools. Synthetic initial conditions: seeded lattice plus Maxwell-Boltzmann velocities (no external dataset).
+Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-process with Unix tools. Synthetic ICs: seeded lattice plus Maxwell-Boltzmann velocities.
 
 ## 1. Simulation Parameters
 
@@ -11,7 +11,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
-- Initial conditions: `/app/particles.dat` as `id x y z vx vy vz`. 10×10×10 lattice (spacing 1.0), particle 0 at (0.5, 0.5, 0.5). T = 1.0; `random.seed(42)`; stdlib Box-Muller only (two calls per particle). Four-normal-to-(vx, vy, vz) assignment verified at step 0.
+- Initial conditions: `/app/particles.dat` as `id x y z vx vy vz`. 10×10×10 lattice (spacing 1.0), particle 0 at (0.5, 0.5, 0.5). T = 1.0; `random.seed(42)`; stdlib Box-Muller only (two calls per particle).
 
 ## 2. C++ Simulation
 
@@ -24,12 +24,12 @@ Implement a periodic-boundary NVE simulation in `/app/simulation.cpp` with:
 
 Also create:
 
-- `/app/Makefile` (must compile with `-fopenmp`; `clean` removes only `simulation` and `*.o`, not logs or analysis outputs)
+- `/app/Makefile` (`-fopenmp`; `clean` removes only `simulation` and `*.o`)
 - `/app/run_simulation.sh` (sets `OMP_NUM_THREADS=4`, builds and runs `/app/simulation --steps 500`)
 
 ### Simulation outputs
 
-- `/app/energy.log`: tab-separated header `Step\tKinetic\tPotential\tTotal`, then one row per step. Verification checks step-0 T and step-1/100/250/400/500 **total** energies against reference values (not separate KE/PE components).
+- `/app/energy.log`: header `Step\tKinetic\tPotential\tTotal`, then one row per step.
 - `/app/timing.log`: measured wall-clock seconds (do not hardcode), one field per line:
 
 ```
@@ -61,7 +61,7 @@ From the **last** XYZ frame in `/app/trajectory.xyz` (step-500 configuration). W
 
 1. For each pair with i < j, compute separations Δx, Δy, Δz; apply minimum-image per component: Δ' = Δ − L·round(Δ/L) with L = 10.0; then r = √(Δx'² + Δy'² + Δz'²).
 2. If r ≤ 5.0, bin b = ⌊r/Δr⌋ and add 2 to count[b] (count both i→j and j→i).
-3. ρ = N/L³ (N = 1000); shell volume V_shell = 4π r²·Δr at left edge r = b·Δr (not exact 4π/3[(r+Δr)³ − r³]).
+3. ρ = N/L³; shell volume V_shell = 4π r²·Δr at left edge r = b·Δr.
 4. g(r) = count[b] / (N·ρ·V_shell); g(0) = 0.
 
 ### `/app/performance.txt`
@@ -85,12 +85,12 @@ After the parallel run, execute one additional serial timing run with `OMP_NUM_T
 ```
 Parallel runtime (4 threads): <total runtime from the parallel run> s
 Serial runtime (1 thread): <total runtime from the serial run> s
-Parallel force time (4 threads): <force time from the parallel timing.log> s
-Serial force time (1 thread): <force time from the serial timing run> s
+Parallel force time (4 threads): <from parallel timing.log> s
+Serial force time (1 thread): <from serial timing run> s
 Speedup: <serial_runtime / parallel_runtime>
 ```
 
-Parallel force time must be less than serial force time (measured wall-clock; no artificial delays).
+Parallel force time must be less than serial force time.
 
 ### `/app/summary.json`
 
@@ -114,4 +114,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification gates (reference under `/tests/reference/`, not visible to the agent): step-0 IC/energy/T rtol 0.1%; particles 0/42/999 lattice and velocities ±1e-5; mid-trajectory **total** energies rtol 0.2%; drift <5%; |COM vα| < 0.05; min pair distance 1.0 ± 1e-4; g(0)=0; RDF self-consistency plus first-shell peak > 1 for r in 0.8–2.5; rerun step-0 0.01% / step-250 0.2%; parallel force time < serial force time; no `sleep`/timing padding in `simulation.cpp`
+- Verification gates (reference under `/tests/reference/`, not visible): seed-42 IC on particles 0/42/999; mid-trajectory total-energy rtol 0.2%; NVE drift <5%; RDF per §3; parallel force < serial force; no timing padding in `simulation.cpp`
