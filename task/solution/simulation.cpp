@@ -75,35 +75,72 @@ public:
 
     void calculate_forces() {
         auto start = std::chrono::high_resolution_clock::now();
+        const int n = n_particles;
+#ifdef _OPENMP
+        const int nthreads = omp_get_max_threads();
+#else
+        const int nthreads = 1;
+#endif
+        std::vector<double> thread_fx(static_cast<std::size_t>(nthreads * n), 0.0);
+        std::vector<double> thread_fy(static_cast<std::size_t>(nthreads * n), 0.0);
+        std::vector<double> thread_fz(static_cast<std::size_t>(nthreads * n), 0.0);
 
 #ifdef _OPENMP
-#pragma omp parallel for
+#pragma omp parallel
 #endif
-        for (int i = 0; i < n_particles; ++i) {
-            particles[i].fx = particles[i].fy = particles[i].fz = 0.0;
-        }
+        {
+#ifdef _OPENMP
+            const int tid = omp_get_thread_num();
+#else
+            const int tid = 0;
+#endif
+            double* local_fx = thread_fx.data() + static_cast<std::size_t>(tid * n);
+            double* local_fy = thread_fy.data() + static_cast<std::size_t>(tid * n);
+            double* local_fz = thread_fz.data() + static_cast<std::size_t>(tid * n);
 
-        for (int i = 0; i < n_particles; ++i) {
-            for (int j = i + 1; j < n_particles; ++j) {
-                const double r2 = distance_sq(particles[i], particles[j]);
-                if (r2 < cutoff * cutoff) {
-                    const double r = std::sqrt(r2);
-                    const double force = lj_force_mag(r);
-                    double dx = minimum_image(particles[j].x - particles[i].x, box_size);
-                    double dy = minimum_image(particles[j].y - particles[i].y, box_size);
-                    double dz = minimum_image(particles[j].z - particles[i].z, box_size);
-                    const double fx = force * dx / r;
-                    const double fy = force * dy / r;
-                    const double fz = force * dz / r;
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
+            for (int i = 0; i < n; ++i) {
+                for (int j = i + 1; j < n; ++j) {
+                    const double r2 = distance_sq(particles[i], particles[j]);
+                    if (r2 < cutoff * cutoff) {
+                        const double r = std::sqrt(r2);
+                        const double force = lj_force_mag(r);
+                        const double dx = minimum_image(particles[j].x - particles[i].x, box_size);
+                        const double dy = minimum_image(particles[j].y - particles[i].y, box_size);
+                        const double dz = minimum_image(particles[j].z - particles[i].z, box_size);
+                        const double fx = force * dx / r;
+                        const double fy = force * dy / r;
+                        const double fz = force * dz / r;
 
-                    particles[i].fx -= fx;
-                    particles[i].fy -= fy;
-                    particles[i].fz -= fz;
-                    particles[j].fx += fx;
-                    particles[j].fy += fy;
-                    particles[j].fz += fz;
+                        local_fx[i] -= fx;
+                        local_fy[i] -= fy;
+                        local_fz[i] -= fz;
+                        local_fx[j] += fx;
+                        local_fy[j] += fy;
+                        local_fz[j] += fz;
+                    }
                 }
             }
+        }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int i = 0; i < n; ++i) {
+            double fx = 0.0;
+            double fy = 0.0;
+            double fz = 0.0;
+            for (int t = 0; t < nthreads; ++t) {
+                const std::size_t idx = static_cast<std::size_t>(t * n + i);
+                fx += thread_fx[idx];
+                fy += thread_fy[idx];
+                fz += thread_fz[idx];
+            }
+            particles[i].fx = fx;
+            particles[i].fy = fy;
+            particles[i].fz = fz;
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -137,7 +174,8 @@ public:
     }
 
     void integrate() {
-        auto start = std::chrono::high_resolution_clock::now();
+        using clock = std::chrono::high_resolution_clock;
+        const auto start = clock::now();
 
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -153,7 +191,9 @@ public:
             apply_periodic_boundary(particles[i]);
         }
 
+        const auto mid = clock::now();
         calculate_forces();
+        const auto post_force = clock::now();
 
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -164,8 +204,9 @@ public:
             particles[i].vz += 0.5 * dt * particles[i].fz;
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        integration_time += std::chrono::duration<double>(end - start).count();
+        const auto end = clock::now();
+        integration_time += std::chrono::duration<double>(mid - start).count();
+        integration_time += std::chrono::duration<double>(end - post_force).count();
     }
 
     void write_trajectory(int step) {
@@ -198,15 +239,21 @@ public:
         std::remove("trajectory.xyz");
         std::remove("energy.log");
 
-        calculate_forces();
         auto start = std::chrono::high_resolution_clock::now();
+        calculate_forces();
 
         for (int step = 0; step <= total_steps; ++step) {
+            const auto step_start = std::chrono::high_resolution_clock::now();
+
             double ke = 0.0;
             double pe = 0.0;
             compute_energies(ke, pe);
             write_energy_log(step, ke, pe);
             write_trajectory(step);
+
+            const auto step_end = std::chrono::high_resolution_clock::now();
+            integration_time += std::chrono::duration<double>(step_end - step_start).count();
+
             if (step < total_steps) {
                 integrate();
             }
@@ -223,6 +270,13 @@ int main(int argc, char** argv) {
     if (argc > 2 && std::string(argv[1]) == "--steps") {
         steps = std::atoi(argv[2]);
     }
+
+#ifdef _OPENMP
+    omp_set_dynamic(0);
+    if (const char* env = std::getenv("OMP_NUM_THREADS")) {
+        omp_set_num_threads(std::atoi(env));
+    }
+#endif
 
     MDSimulation sim(1000, 10.0, 2.5, 0.0005, steps);
     sim.load_particles("particles.dat");

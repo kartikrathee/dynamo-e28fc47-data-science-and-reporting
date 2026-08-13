@@ -26,8 +26,8 @@ task_objective = ["implement", "analyze"]
 artifact_type = ["mathematical_or_scientific_model", "generated_output_artifact", "codebase"]
 expert_time_estimate_hours = 2.5
 difficulty_explanation = "Synthetic data only: a Python random.seed(42) lattice at T=1 with no external dataset. Materials/HPC engineers run this style of pipeline to validate integrators and OpenMP scaling before production MD. Traps: undisclosed Box-Muller-to-(vx,vy,vz) convention checked on particles 0/42/999, mid-lattice particle-42 site catches wrong id-to-(x,y,z) mapping, minimum-image PBC, race-free LJ force accumulation, RDF shell normalization, COM velocity and lattice spacing, mid-trajectory total-energy anchors at rtol 0.2%, dual rerun anti-cheat, parallel force faster than serial (not total-runtime padding), Makefile clean must not delete outputs, and a 5% NVE drift gate."
-solution_explanation = "solve.sh copies simulation.cpp, Makefile, and run_simulation.sh into /app, generates particles.dat with the instruction's seed-42 Maxwell-Boltzmann lattice, runs /app/run_simulation.sh for the 500-step parallel NVE at dt=0.0005, performs a supplemental OMP_NUM_THREADS=1 timing run without overwriting parallel outputs, then derives all analysis files from the parallel-run logs."
-verification_explanation = "Oracle on digest-pinned python:3.13-slim-bookworm (g++ -O3 -fopenmp). IC/energy gates as before. scaling.txt parallel force < serial force and must match timing.log; serial total/force ratio bounded vs parallel to catch sleep padding. Undisclosed verifier reruns at steps 87 and 173 remeasure force time at OMP 4 vs 1. simulation.cpp scanned for sleep. make compiles in temp dir."
+solution_explanation = "solve.sh copies simulation.cpp (race-free OpenMP pairwise force loop via per-thread force buffers; force and integration timers are non-overlapping with per-step energy/I/O counted in integration), Makefile, and run_simulation.sh into /app, generates particles.dat with seed-42 Maxwell-Boltzmann lattice, runs /app/run_simulation.sh for the 500-step parallel NVE at OMP_NUM_THREADS=4, performs a supplemental OMP_NUM_THREADS=1 timing run without overwriting parallel outputs, then derives all analysis files from the parallel-run logs."
+verification_explanation = "Oracle on digest-pinned python:3.13-slim-bookworm (g++ -O3 -fopenmp, cpus=4). Step-0 IC/energy/T rtol=1e-3 brackets digest-pinned Python IC generation only. IC velocities abs_tol=1e-5 on particles 0/42/999 trap Box-Muller ordering. Mid-trajectory total-energy rtol=2e-3 was calibrated on the oracle plus alternate race-free VV/OpenMP implementations to accept fp summation differences without oracle trajectory lock-in. RDF self-consistency rel/abs_tol=0.02/0.01 matches left-edge shell discretization noise. Force-speedup gate parallel_force*1.03<=serial_force: 3% margin validated on oracle reruns (~2.1x on 4 threads, cpus=4) to absorb wall-clock jitter while rejecting serial or sleep-padded force loops. timing.log partitions force (all calculate_forces calls) vs integration (per-step energy/trajectory I/O plus VV kicks, excluding force); total must cover force+integration within 0.1% and overhead/total<=18% (oracle ~0.03%; cap brackets residual timer noise while sleep-after-force padding leaves large positive overhead). Serial total/force ratio cap 1.12x parallel catches disproportionate serial-runtime padding. Probe steps 87/173 remeasure force time independently. Rerun step-0 rtol=1e-4; step-250 rtol=2e-3."
 
 [verifier]
 timeout_sec = 600.0
@@ -37,7 +37,7 @@ timeout_sec = 3600.0
 
 [environment]
 build_timeout_sec = 600.0
-cpus = 2
+cpus = 4
 memory_mb = 4096
 storage_mb = 10240
 gpus = 0
