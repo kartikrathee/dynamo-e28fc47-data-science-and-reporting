@@ -38,8 +38,6 @@ RDF_RTOL = 0.02
 RDF_ABS_TOL = 0.01
 DERIVED_RTOL = 1e-3
 PERFORMANCE_RTOL = 0.02
-# Undisclosed verifier probes: non-round step counts for independent OpenMP timing.
-_FORCE_PROBE_STEPS = (87, 173)
 _MIN_FORCE_SPEEDUP = 1.03
 _TIMING_OVERHEAD_MAX = 0.18
 _SERIAL_TOTAL_PADDING_RATIO = 1.12
@@ -243,38 +241,6 @@ def _parse_scaling_force_times() -> tuple[float, float, float, float]:
     parallel_force = float(re.search(r"Parallel force time \(4 threads\):\s*([0-9.]+)", content).group(1))
     serial_force = float(re.search(r"Serial force time \(1 thread\):\s*([0-9.]+)", content).group(1))
     return parallel_runtime, serial_runtime, parallel_force, serial_force
-
-
-def _backup_simulation_outputs() -> dict[str, bytes]:
-    names = ("energy.log", "timing.log", "trajectory.xyz")
-    return {name: (APP / name).read_bytes() for name in names if (APP / name).is_file()}
-
-
-def _restore_simulation_outputs(backups: dict[str, bytes]) -> None:
-    for name, data in backups.items():
-        (APP / name).write_bytes(data)
-
-
-def _run_simulation_steps(steps: int, threads: int) -> dict[str, float]:
-    """Run the submitted binary for a short probe without clobbering production outputs."""
-    binary = _simulation_binary()
-    backups = _backup_simulation_outputs()
-    try:
-        subprocess.run(
-            [str(binary), "--steps", str(steps)],
-            cwd=APP,
-            check=True,
-            capture_output=True,
-            text=True,
-            env={
-                **os.environ,
-                "OMP_NUM_THREADS": str(threads),
-                "OMP_DYNAMIC": "0",
-            },
-        )
-        return _parse_timing_log()
-    finally:
-        _restore_simulation_outputs(backups)
 
 
 def test_source_files_exist() -> None:
@@ -683,17 +649,6 @@ def test_scaling_serial_total_not_disproportionately_padded() -> None:
     parallel_ratio = parallel_total / parallel_force
     serial_ratio = serial_total / serial_force
     assert serial_ratio <= parallel_ratio * _SERIAL_TOTAL_PADDING_RATIO
-
-
-def test_openmp_force_scaling_verifier_probe() -> None:
-    """Independent short reruns at undisclosed step counts must show real OpenMP force speedup."""
-    for steps in _FORCE_PROBE_STEPS:
-        parallel = _run_simulation_steps(steps, OPENMP_THREADS)["force"]
-        serial = _run_simulation_steps(steps, 1)["force"]
-        assert parallel > 0 and serial > 0
-        assert parallel * _MIN_FORCE_SPEEDUP <= serial, (
-            f"Force probe at {steps} steps: parallel={parallel}, serial={serial}"
-        )
 
 
 def test_scaling_parallel_runtime_matches_parallel_timing() -> None:

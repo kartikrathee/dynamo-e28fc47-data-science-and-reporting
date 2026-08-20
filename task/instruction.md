@@ -11,7 +11,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
-- Initial conditions: `/app/particles.dat` as `id x y z vx vy vz`. 10×10×10 lattice (spacing 1.0), particle 0 at (0.5, 0.5, 0.5). T = 1.0; `random.seed(42)`; stdlib Box-Muller only (two calls per particle).
+- Initial conditions: `/app/particles.dat` as `id x y z vx vy vz`. 10×10×10 lattice (spacing 1.0), particle 0 at (0.5, 0.5, 0.5). T = 1.0 means unit-variance Maxwell-Boltzmann draws: use raw stdlib Box-Muller normals (`random.seed(42)`, two calls per particle; first pair → vx,vy; second pair's cos → vz) with no rescale-to-exact-T and no COM-velocity subtraction.
 
 ## 2. C++ Simulation
 
