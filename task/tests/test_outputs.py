@@ -269,7 +269,7 @@ def test_particle0_velocity_matches_reference(reference: dict) -> None:
 
 
 def test_particle42_lattice_position_matches_reference(reference: dict) -> None:
-    """Particle 42 must sit on the mid-lattice site specified in the instruction."""
+    """Particle 42 must sit on the x-fastest mid-lattice site from instruction §1."""
     row = _particle_row(42)
     ref = reference["particle42"]
     for axis in ("x", "y", "z"):
@@ -630,7 +630,7 @@ def test_timing_log_total_overhead_is_bounded() -> None:
 
 
 def test_parallel_force_time_faster_than_serial() -> None:
-    """Parallel OpenMP force time must beat the supplemental serial force time."""
+    """Parallel force time must beat serial by at least 3% (instruction §3 scaling.txt)."""
     _, _, parallel_force, serial_force = _parse_scaling_force_times()
     assert parallel_force > 0 and serial_force > 0
     assert parallel_force * _MIN_FORCE_SPEEDUP <= serial_force
