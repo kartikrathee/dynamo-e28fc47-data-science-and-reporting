@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -26,6 +27,22 @@ private:
     int total_steps;
     double force_time = 0.0;
     double integration_time = 0.0;
+    std::vector<double> thread_fx_;
+    std::vector<double> thread_fy_;
+    std::vector<double> thread_fz_;
+
+    void ensure_thread_force_buffers(int n, int nthreads) {
+        const std::size_t need = static_cast<std::size_t>(nthreads * n);
+        if (thread_fx_.size() != need) {
+            thread_fx_.assign(need, 0.0);
+            thread_fy_.assign(need, 0.0);
+            thread_fz_.assign(need, 0.0);
+            return;
+        }
+        std::fill(thread_fx_.begin(), thread_fx_.end(), 0.0);
+        std::fill(thread_fy_.begin(), thread_fy_.end(), 0.0);
+        std::fill(thread_fz_.begin(), thread_fz_.end(), 0.0);
+    }
 
     static double minimum_image(double delta, double box) {
         return delta - box * std::round(delta / box);
@@ -81,9 +98,10 @@ public:
 #else
         const int nthreads = 1;
 #endif
-        std::vector<double> thread_fx(static_cast<std::size_t>(nthreads * n), 0.0);
-        std::vector<double> thread_fy(static_cast<std::size_t>(nthreads * n), 0.0);
-        std::vector<double> thread_fz(static_cast<std::size_t>(nthreads * n), 0.0);
+        ensure_thread_force_buffers(n, nthreads);
+        double* fx_buf = thread_fx_.data();
+        double* fy_buf = thread_fy_.data();
+        double* fz_buf = thread_fz_.data();
 
 #ifdef _OPENMP
 #pragma omp parallel
@@ -94,9 +112,9 @@ public:
 #else
             const int tid = 0;
 #endif
-            double* local_fx = thread_fx.data() + static_cast<std::size_t>(tid * n);
-            double* local_fy = thread_fy.data() + static_cast<std::size_t>(tid * n);
-            double* local_fz = thread_fz.data() + static_cast<std::size_t>(tid * n);
+            double* local_fx = fx_buf + static_cast<std::size_t>(tid * n);
+            double* local_fy = fy_buf + static_cast<std::size_t>(tid * n);
+            double* local_fz = fz_buf + static_cast<std::size_t>(tid * n);
 
 #ifdef _OPENMP
 #pragma omp for schedule(static)
@@ -134,9 +152,9 @@ public:
             double fz = 0.0;
             for (int t = 0; t < nthreads; ++t) {
                 const std::size_t idx = static_cast<std::size_t>(t * n + i);
-                fx += thread_fx[idx];
-                fy += thread_fy[idx];
-                fz += thread_fz[idx];
+                fx += fx_buf[idx];
+                fy += fy_buf[idx];
+                fz += fz_buf[idx];
             }
             particles[i].fx = fx;
             particles[i].fy = fy;
