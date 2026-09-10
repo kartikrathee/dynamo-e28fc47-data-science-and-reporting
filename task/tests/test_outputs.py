@@ -38,9 +38,9 @@ RDF_RTOL = 0.02
 RDF_ABS_TOL = 0.01
 DERIVED_RTOL = 1e-3
 PERFORMANCE_RTOL = 0.02
-_MIN_FORCE_SPEEDUP = 1.03
+_MIN_FORCE_SPEEDUP = 1.10
 _TIMING_OVERHEAD_MAX = 0.18
-_SERIAL_TOTAL_PADDING_RATIO = 1.12
+_SERIAL_TOTAL_PADDING_RATIO = 1.15
 
 
 _REQUIRED_REFERENCE_KEYS = (
@@ -577,9 +577,15 @@ def test_simulation_source_has_no_artificial_delays() -> None:
     source = (APP / "simulation.cpp").read_text()
     forbidden = (
         r"sleep_for",
+        r"std::this_thread",
         r"\busleep\s*\(",
         r"\bnanosleep\s*\(",
         r"SIM_MIN_TOTAL_RUNTIME",
+        r"SIM_EXTRA_DELAY",
+        r"EXTRA_DELAY",
+        r"MIN_TOTAL_RUNTIME",
+        r'timing_parallel\.log',
+        r'getenv\s*\(\s*["\']SIM_',
     )
     for pattern in forbidden:
         assert re.search(pattern, source) is None, f"Forbidden timing manipulation: {pattern}"
@@ -630,7 +636,7 @@ def test_timing_log_total_overhead_is_bounded() -> None:
 
 
 def test_parallel_force_time_faster_than_serial() -> None:
-    """Parallel force time must beat serial by at least 3% (instruction §3 scaling.txt)."""
+    """Parallel force time must beat serial by at least 10% (instruction §3 scaling.txt)."""
     _, _, parallel_force, serial_force = _parse_scaling_force_times()
     assert parallel_force > 0 and serial_force > 0
     assert parallel_force * _MIN_FORCE_SPEEDUP <= serial_force
