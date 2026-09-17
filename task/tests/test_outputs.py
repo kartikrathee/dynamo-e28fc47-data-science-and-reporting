@@ -627,7 +627,7 @@ def test_timing_log_reports_force_integration_and_total() -> None:
 
 
 def test_timing_log_total_overhead_is_bounded() -> None:
-    """Total runtime must track force+integration; large gaps indicate padding."""
+    """timing.log overhead (total-force-integration)/total must be <= 0.18 (instruction §2)."""
     timing = _parse_timing_log()
     work = timing["force"] + timing["integration"]
     assert timing["total"] >= work * (1.0 - DERIVED_RTOL)
@@ -650,7 +650,7 @@ def test_scaling_parallel_force_matches_timing_log() -> None:
 
 
 def test_scaling_serial_total_not_disproportionately_padded() -> None:
-    """Serial total runtime cannot exceed parallel overhead band unless force time also grew."""
+    """Serial total/force ratio must be <= 1.15x parallel (instruction §3 scaling.txt)."""
     parallel_total, serial_total, parallel_force, serial_force = _parse_scaling_force_times()
     parallel_ratio = parallel_total / parallel_force
     serial_ratio = serial_total / serial_force

@@ -1,6 +1,6 @@
 You are inside a Linux container. Your working directory is `/app`.
 
-Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-process with Unix tools. Synthetic ICs: seeded lattice plus Maxwell-Boltzmann velocities.
+Build a Lennard-Jones NVE pipeline in C++ with OpenMP and Unix post-processing. Synthetic seed-42 ICs.
 
 ## 1. Simulation Parameters
 
@@ -11,7 +11,7 @@ Build a multi-threaded Lennard-Jones NVE pipeline in C++ with OpenMP and post-pr
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
 - Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
-- Initial conditions: `/app/particles.dat` as `id x y z vx vy vz`. 10×10×10 lattice (spacing 1.0), particle 0 at (0.5, 0.5, 0.5). Index ids with **x fastest**: `ix=id%10`, `iy=(id//10)%10`, `iz=id//100`. T = 1.0 means unit-variance Maxwell-Boltzmann draws: `random.seed(42)`; per particle draw `u1=max(random(),1e-12)`, `u2=random()`, `radius=sqrt(-2*ln(u1))`, `angle=2π*u2`; first Box-Muller pair → vx,vy; second pair's **cos** → vz. No rescale-to-exact-T and no COM-velocity subtraction.
+- Initial conditions: `/app/particles.dat` (`id x y z vx vy vz`). 10×10×10 lattice (spacing 1.0); x-fastest ids `ix=id%10`, `iy=(id//10)%10`, `iz=id//100`; particle 0 at (0.5,0.5,0.5). `random.seed(42)` Box-Muller per particle: `u1=max(random(),1e-12)`, `radius=sqrt(-2 ln u1)`, `angle=2π·random()`; first pair→vx,vy; second **cos**→vz; no rescale-to-exact-T, no COM subtraction.
 
 ## 2. C++ Simulation
 
@@ -38,6 +38,8 @@ Integration time: <seconds> s
 Total runtime: <seconds> s
 ```
 
+**Timing partition:** Force = all force calls; Integration = energy reduction plus `energy.log` / `trajectory.xyz` I/O plus VV updates (exclude force); Total = wall clock from first force through step 500. Require `total ≥ force + integration` and `(total − force − integration)/total ≤ 0.18`.
+
 ## 3. Analysis Pipeline
 
 Derive all analysis files from the simulation outputs:
@@ -59,7 +61,7 @@ From the **last** XYZ frame in `/app/trajectory.xyz` (step-500 configuration). W
 
 **Normative g(r) procedure:**
 
-1. For each pair with i < j, compute separations Δx, Δy, Δz; apply minimum-image per component: Δ' = Δ − L·round(Δ/L) with L = 10.0; then r = √(Δx'² + Δy'² + Δz'²).
+1. For i<j pairs, minimum-image Δx,Δy,Δz with L=10; r=√(Δx²+Δy²+Δz²).
 2. If r ≤ 5.0, bin b = ⌊r/Δr⌋ and add 2 to count[b] (count both i→j and j→i).
 3. ρ = N/L³; shell volume V_shell = 4π r²·Δr at left edge r = b·Δr.
 4. g(r) = count[b] / (N·ρ·V_shell); g(0) = 0.
@@ -90,7 +92,7 @@ Serial force time (1 thread): <from serial timing run> s
 Speedup: <serial_runtime / parallel_runtime>
 ```
 
-Parallel force time must beat serial by at least 10% (`serial_force ≥ 1.10 × parallel_force`).
+Parallel force: `serial_force ≥ 1.10 × parallel_force`. Total/force overhead: `(serial_total/serial_force) ≤ 1.15 × (parallel_total/parallel_force)`.
 
 ### `/app/summary.json`
 
@@ -114,4 +116,4 @@ Set `"validation_status": "PASS"` only if relative total-energy drift from step 
 - Use seed 42 for reproducible initial conditions
 - All analysis values must be computed from simulation outputs (do not hardcode metrics)
 - The compiled `/app/simulation` binary must be executed to produce `/app/energy.log` and `/app/trajectory.xyz`
-- Verification gates (reference under `/tests/reference/`, not visible): seed-42 IC on particles 0/42/999 (x-fastest lattice, u1 Box-Muller radius); mid-trajectory total-energy rtol 0.2%; NVE drift <5%; RDF per §3; parallel force ≥10% below serial; no timing padding in `simulation.cpp`
+- Verification gates (not visible): seed-42 IC particles 0/42/999; mid-trajectory energy rtol 0.2%; NVE drift <5%; RDF §3; timing §2; scaling §3; no sleep padding in `simulation.cpp`
