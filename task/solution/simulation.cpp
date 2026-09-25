@@ -117,7 +117,7 @@ public:
             double* local_fz = fz_buf + static_cast<std::size_t>(tid * n);
 
 #ifdef _OPENMP
-#pragma omp for schedule(static)
+#pragma omp for schedule(guided, 8)
 #endif
             for (int i = 0; i < n; ++i) {
                 for (int j = i + 1; j < n; ++j) {
