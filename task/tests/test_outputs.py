@@ -243,6 +243,106 @@ def _parse_scaling_force_times() -> tuple[float, float, float, float]:
     return parallel_runtime, serial_runtime, parallel_force, serial_force
 
 
+def _parse_trajectory_frames() -> list[list[tuple[float, float, float]]]:
+    lines = (APP / "trajectory.xyz").read_text().splitlines()
+    frames: list[list[tuple[float, float, float]]] = []
+    idx = 0
+    while idx < len(lines):
+        count = int(lines[idx])
+        idx += 2
+        frame: list[tuple[float, float, float]] = []
+        for _ in range(count):
+            parts = lines[idx].split()
+            frame.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            idx += 1
+        frames.append(frame)
+    return frames
+
+
+def _recompute_msd_lag1(frames: list[list[tuple[float, float, float]]]) -> float:
+    """MSD with cumulative MIC unwrap; lag = 1 saved frame (instruction §3)."""
+    n_particles = len(frames[0])
+    frame_count = len(frames)
+    unwrapped = [[[0.0, 0.0, 0.0] for _ in range(n_particles)] for _ in range(frame_count)]
+    for particle in range(n_particles):
+        unwrapped[0][particle] = list(frames[0][particle])
+    for frame_idx in range(1, frame_count):
+        for particle in range(n_particles):
+            for axis in range(3):
+                delta = frames[frame_idx][particle][axis] - frames[frame_idx - 1][particle][axis]
+                unwrapped[frame_idx][particle][axis] = (
+                    unwrapped[frame_idx - 1][particle][axis] + _minimum_image(delta)
+                )
+    acc = 0.0
+    pairs = 0
+    for frame_idx in range(frame_count - 1):
+        for particle in range(n_particles):
+            dx = unwrapped[frame_idx + 1][particle][0] - unwrapped[frame_idx][particle][0]
+            dy = unwrapped[frame_idx + 1][particle][1] - unwrapped[frame_idx][particle][1]
+            dz = unwrapped[frame_idx + 1][particle][2] - unwrapped[frame_idx][particle][2]
+            acc += dx * dx + dy * dy + dz * dz
+            pairs += 1
+    return acc / pairs
+
+
+def _temperatures_by_step() -> dict[int, float]:
+    return {int(row["step"]): _temperature_from_ke(float(row["ke"])) for row in _read_energy_rows()}
+
+
+def _recompute_block_temperature_stats() -> tuple[float, float]:
+    """Block stderr and grand mean over steps 1-500 excluding step 0 (instruction §3)."""
+    temps = _temperatures_by_step()
+    block_means = []
+    for block in range(10):
+        start = block * 50 + 1
+        end = start + 49
+        block_temps = [temps[step] for step in range(start, end + 1)]
+        block_means.append(sum(block_temps) / len(block_temps))
+    grand_mean = sum(block_means) / len(block_means)
+    block_stderr = statistics.stdev(block_means) / math.sqrt(len(block_means))
+    return block_stderr, grand_mean
+
+
+def _parse_temperature_blocks() -> dict[str, float]:
+    content = (APP / "temperature_blocks.txt").read_text()
+    return {
+        "block_stderr": float(re.search(r"^Block mean stderr:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)),
+        "grand_mean": float(re.search(r"^Grand mean:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)),
+    }
+
+
+def _recompute_heat_capacity_window() -> tuple[float, float, float]:
+    """Sample variance of total energy and reduced Cv for steps 250-500 (instruction §3)."""
+    rows = _read_energy_rows()
+    window = [row for row in rows if 250 <= int(row["step"]) <= 500]
+    totals = [float(row["total"]) for row in window]
+    temps = [_temperature_from_ke(float(row["ke"])) for row in window]
+    energy_var = statistics.variance(totals)
+    t_win = sum(temps) / len(temps)
+    reduced_cv = energy_var / (N_PARTICLES * t_win * t_win)
+    return energy_var, t_win, reduced_cv
+
+
+def _parse_heat_capacity() -> dict[str, float]:
+    content = (APP / "heat_capacity.txt").read_text()
+    return {
+        "energy_var": float(
+            re.search(r"^Energy sample variance:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)
+        ),
+        "t_win": float(
+            re.search(r"^Window mean temperature:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)
+        ),
+        "reduced_cv": float(re.search(r"^Reduced Cv:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)),
+    }
+
+
+def _parse_msd_lag10() -> float:
+    content = (APP / "msd_lag10.txt").read_text()
+    assert re.search(r"^Lag frames:\s*1\s*$", content, re.MULTILINE)
+    assert re.search(r"^Lag steps:\s*10\s*$", content, re.MULTILINE)
+    return float(re.search(r"^MSD:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1))
+
+
 def test_source_files_exist() -> None:
     """Required source artifacts must exist under /app and be non-empty."""
     required = ("simulation.cpp", "Makefile", "run_simulation.sh", "particles.dat")
@@ -327,6 +427,9 @@ def test_output_files_exist() -> None:
         "timing.log",
         "temperature_stats.txt",
         "rdf.dat",
+        "msd_lag10.txt",
+        "temperature_blocks.txt",
+        "heat_capacity.txt",
         "performance.txt",
         "scaling.txt",
         "summary.json",
@@ -667,3 +770,41 @@ def test_scaling_parallel_runtime_matches_parallel_timing() -> None:
         ).group(1)
     )
     assert math.isclose(scaling_parallel, timing_total, rel_tol=DERIVED_RTOL)
+
+
+def test_msd_lag10_matches_unwrapped_trajectory() -> None:
+    """MSD must use cumulative MIC unwrap over all trajectory frames at lag 1 frame (10 steps)."""
+    expected = _recompute_msd_lag1(_parse_trajectory_frames())
+    reported = _parse_msd_lag10()
+    assert reported > 0
+    assert math.isclose(reported, expected, rel_tol=DERIVED_RTOL)
+
+
+def test_temperature_block_stderr_excludes_step0() -> None:
+    """Block stderr must use sample std of ten block means over steps 1-500 only (exclude step 0)."""
+    expected_stderr, expected_grand = _recompute_block_temperature_stats()
+    reported = _parse_temperature_blocks()
+    content = (APP / "temperature_blocks.txt").read_text()
+    assert "Block size: 50" in content
+    assert "Block count: 10" in content
+    assert math.isclose(reported["block_stderr"], expected_stderr, rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported["grand_mean"], expected_grand, rel_tol=DERIVED_RTOL)
+
+
+def test_heat_capacity_second_half_sample_variance() -> None:
+    """Reduced Cv must use sample variance (ddof=1) of total energy for steps 250-500 inclusive."""
+    expected_var, expected_t, expected_cv = _recompute_heat_capacity_window()
+    reported = _parse_heat_capacity()
+    assert (APP / "heat_capacity.txt").read_text().splitlines()[0] == "Window: steps 250-500"
+    assert math.isclose(reported["energy_var"], expected_var, rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported["t_win"], expected_t, rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported["reduced_cv"], expected_cv, rel_tol=DERIVED_RTOL)
+
+
+def test_block_grand_mean_differs_from_global_temperature_mean() -> None:
+    """Grand mean in temperature_blocks.txt must exclude step 0 and differ from temperature_stats mean."""
+    global_mean = _parse_temperature_stats()["Mean"]
+    block_grand = _parse_temperature_blocks()["grand_mean"]
+    steps_1_500_mean = sum(_temperatures_by_step()[s] for s in range(1, TOTAL_STEPS + 1)) / TOTAL_STEPS
+    assert math.isclose(block_grand, steps_1_500_mean, rel_tol=DERIVED_RTOL)
+    assert not math.isclose(block_grand, global_mean, rel_tol=1e-4)

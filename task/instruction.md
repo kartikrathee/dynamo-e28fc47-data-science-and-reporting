@@ -66,6 +66,56 @@ From the **last** XYZ frame in `/app/trajectory.xyz` (step-500 configuration). W
 3. ρ = N/L³; shell volume V_shell = 4π r²·Δr at left edge r = b·Δr.
 4. g(r) = count[b] / (N·ρ·V_shell); g(0) = 0.
 
+### `/app/msd_lag10.txt`
+
+From **all** frames in `/app/trajectory.xyz` (51 frames at steps 0, 10, …, 500). Positions only — do not read velocities from elsewhere.
+
+**Cumulative MIC unwrap** (L = 10.0): for each particle `p`, frame `f = 0` uses wrapped `(x, y, z)` from the XYZ frame. For `f ≥ 1`, incremental displacement from consecutive wrapped coordinates uses `Δ = coord(f) − coord(f−1)` then `Δ_mic = Δ − L·round(Δ/L)` (same convention as RDF §3), and unwrapped coordinates accumulate: `coord_u(f) = coord_u(f−1) + Δ_mic`.
+
+**MSD** for lag **1 saved frame** (= 10 simulation steps):
+
+```
+MSD = (1 / (N · (F − 1))) · Σ_p Σ_{f=0}^{F−2} |r_u(p,f+1) − r_u(p,f)|²
+```
+
+with N = 1000, F = 51. Write exactly:
+
+```
+Lag frames: 1
+Lag steps: 10
+MSD: <value with at least 9 digits after the decimal>
+```
+
+### `/app/temperature_blocks.txt`
+
+From `/app/energy.log` only. **Exclude step 0** from this entire analysis. Partition steps **1 through 500** into **10** consecutive blocks of **50** steps: block `b` (0-indexed) covers steps `50·b + 1` … `50·b + 50`. For each block, `T_b = mean of T(step)` with `T = 2·KE/(3·N)`.
+
+Let `μ_B = (1/10) Σ_b T_b` (mean of the ten block means). Sample standard deviation of block means: `s_B = sqrt( (1/9) Σ_b (T_b − μ_B)² )`. **Block standard error:** `SE = s_B / sqrt(10)`.
+
+Write exactly:
+
+```
+Block size: 50
+Block count: 10
+Block mean stderr: <SE>
+Grand mean: <μ_B>
+```
+
+(`Grand mean` is the mean of block means over steps 1–500; it is **not** the same as `Mean Temperature` in `temperature_stats.txt`, which includes step 0.)
+
+### `/app/heat_capacity.txt`
+
+From `/app/energy.log` **total-energy column** for steps **250 through 500 inclusive** (251 samples). Let `μ_E` be the sample mean and `Var_E` the **sample variance with ddof = 1** (divide by 250, not 251). Let `T_win` be the mean of `T = 2·KE/(3·N)` over the same step window. **Reduced heat capacity estimate:** `Cv = Var_E / (N · T_win²)`.
+
+Write exactly:
+
+```
+Window: steps 250-500
+Energy sample variance: <Var_E>
+Window mean temperature: <T_win>
+Reduced Cv: <Cv>
+```
+
 ### `/app/performance.txt`
 
 Derive from the three `/app/timing.log` lines defined in §2 (`Force calculation time`, `Integration time`, `Total runtime`). Write:
