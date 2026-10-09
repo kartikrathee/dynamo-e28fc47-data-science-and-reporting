@@ -230,9 +230,11 @@ public:
     void write_trajectory(int step) {
         if (step % 10 != 0) return;
         std::ofstream file("trajectory.xyz", std::ios::app);
-        file << n_particles << "\nStep " << step << "\n";
+        file << std::fixed << std::setprecision(6);
+        file << n_particles << "\nStep: " << step << "\n";
         for (const auto& p : particles) {
-            file << "Ar " << p.x << " " << p.y << " " << p.z << "\n";
+            file << "Ar " << p.x << " " << p.y << " " << p.z << " "
+                 << p.vx << " " << p.vy << " " << p.vz << "\n";
         }
     }
 

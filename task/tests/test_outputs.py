@@ -54,6 +54,9 @@ _REQUIRED_REFERENCE_KEYS = (
     "step250",
     "step400",
     "step500",
+    "particle0_step500",
+    "particle42_step500",
+    "particle999_step500",
     "com_velocity",
     "min_pair_distance",
     "rdf_g0",
@@ -244,19 +247,107 @@ def _parse_scaling_force_times() -> tuple[float, float, float, float]:
 
 
 def _parse_trajectory_frames() -> list[list[tuple[float, float, float]]]:
+    return [[(p[0], p[1], p[2]) for p in frame] for frame in _parse_trajectory_frames_extended()]
+
+
+def _parse_trajectory_frames_extended() -> list[list[tuple[float, float, float, float, float, float]]]:
     lines = (APP / "trajectory.xyz").read_text().splitlines()
-    frames: list[list[tuple[float, float, float]]] = []
+    frames: list[list[tuple[float, float, float, float, float, float]]] = []
     idx = 0
     while idx < len(lines):
         count = int(lines[idx])
         idx += 2
-        frame: list[tuple[float, float, float]] = []
+        frame: list[tuple[float, float, float, float, float, float]] = []
         for _ in range(count):
             parts = lines[idx].split()
-            frame.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            assert len(parts) == 7, f"Expected extended XYZ atom line with 7 fields, got {len(parts)}"
+            frame.append(tuple(float(parts[i]) for i in range(1, 7)))
             idx += 1
         frames.append(frame)
     return frames
+
+
+def _trajectory_frame_step_numbers() -> list[int]:
+    lines = (APP / "trajectory.xyz").read_text().splitlines()
+    steps: list[int] = []
+    idx = 0
+    while idx < len(lines):
+        count = int(lines[idx])
+        header = lines[idx + 1]
+        match = re.fullmatch(r"Step: (\d+)", header)
+        assert match is not None, f"Trajectory frame header must be 'Step: <n>', got {header!r}"
+        steps.append(int(match.group(1)))
+        idx += count + 2
+    return steps
+
+
+def _parse_frame_velocities(frame_index: int) -> list[tuple[float, float, float]]:
+    frame = _parse_trajectory_frames_extended()[frame_index]
+    return [(p[3], p[4], p[5]) for p in frame]
+
+
+def _lj_force_mag(r: float) -> float:
+    if r < 1e-10:
+        return 0.0
+    inv_r6 = (1.0 / r) ** 6
+    inv_r12 = inv_r6 * inv_r6
+    return 24.0 * (2.0 * inv_r12 - inv_r6) / r
+
+
+def _recompute_vacf_lag1(frames: list[list[tuple[float, float, float, float, float, float]]]) -> float:
+    frame_count = len(frames)
+    n_particles = len(frames[0])
+    numerator = 0.0
+    denominator = 0.0
+    for frame_idx in range(frame_count - 1):
+        for particle in range(n_particles):
+            _, _, _, vx0, vy0, vz0 = frames[frame_idx][particle]
+            _, _, _, vx1, vy1, vz1 = frames[frame_idx + 1][particle]
+            numerator += vx0 * vx1 + vy0 * vy1 + vz0 * vz1
+    for frame_idx in range(frame_count):
+        for particle in range(n_particles):
+            _, _, _, vx, vy, vz = frames[frame_idx][particle]
+            denominator += vx * vx + vy * vy + vz * vz
+    return numerator / denominator
+
+
+def _recompute_pressure_virial(positions: list[tuple[float, float, float]], t500: float) -> tuple[float, float, float]:
+    virial = 0.0
+    rc2 = 2.5 * 2.5
+    for i, pos_i in enumerate(positions):
+        for j in range(i + 1, len(positions)):
+            pos_j = positions[j]
+            dx = _minimum_image(pos_j[0] - pos_i[0])
+            dy = _minimum_image(pos_j[1] - pos_i[1])
+            dz = _minimum_image(pos_j[2] - pos_i[2])
+            r2 = dx * dx + dy * dy + dz * dz
+            if r2 >= rc2:
+                continue
+            r = math.sqrt(r2)
+            force_mag = _lj_force_mag(r)
+            fx = -force_mag * dx / r
+            fy = -force_mag * dy / r
+            fz = -force_mag * dz / r
+            virial += dx * fx + dy * fy + dz * fz
+    volume = BOX_DIM ** 3
+    thermal = N_PARTICLES * t500 / volume
+    virial_corr = virial / (3.0 * volume)
+    return thermal, virial_corr, thermal + virial_corr
+
+
+def _parse_vacf_lag1() -> float:
+    content = (APP / "vacf_lag1.txt").read_text()
+    assert re.search(r"^Lag frames:\s*1\s*$", content, re.MULTILINE)
+    return float(re.search(r"^VACF:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1))
+
+
+def _parse_pressure_virial() -> dict[str, float]:
+    content = (APP / "pressure_virial.txt").read_text()
+    return {
+        "thermal": float(re.search(r"^Thermal pressure:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)),
+        "virial": float(re.search(r"^Virial correction:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)),
+        "total": float(re.search(r"^Total pressure:\s*([0-9.eE+-]+)", content, re.MULTILINE).group(1)),
+    }
 
 
 def _recompute_msd_lag1(frames: list[list[tuple[float, float, float]]]) -> float:
@@ -427,7 +518,10 @@ def test_output_files_exist() -> None:
         "timing.log",
         "temperature_stats.txt",
         "rdf.dat",
+        "rdf_step250.dat",
         "msd_lag10.txt",
+        "vacf_lag1.txt",
+        "pressure_virial.txt",
         "temperature_blocks.txt",
         "heat_capacity.txt",
         "performance.txt",
@@ -438,10 +532,16 @@ def test_output_files_exist() -> None:
 
 
 def test_trajectory_format() -> None:
-    """Trajectory must contain 51 VMD-compatible frames for 1000 particles."""
+    """Trajectory must contain 51 extended XYZ frames with Step: headers and velocities."""
     lines = (APP / "trajectory.xyz").read_text().splitlines()
     expected_frames = (TOTAL_STEPS // TRAJECTORY_INTERVAL) + 1
     assert len(lines) == expected_frames * (N_PARTICLES + 2)
+    steps = _trajectory_frame_step_numbers()
+    assert steps == list(range(0, TOTAL_STEPS + 1, TRAJECTORY_INTERVAL))
+    for frame in _parse_trajectory_frames_extended():
+        assert len(frame) == N_PARTICLES
+        for particle in frame:
+            assert len(particle) == 6
 
 
 def test_energy_log_row_count() -> None:
@@ -569,7 +669,7 @@ def test_temperature_stats_match_energy_log() -> None:
     temps = [_temperature_from_ke(float(row["ke"])) for row in rows]
     stats = _parse_temperature_stats()
     assert math.isclose(stats["Mean"], sum(temps) / len(temps), rel_tol=DERIVED_RTOL)
-    assert math.isclose(stats["Std Dev"], statistics.pstdev(temps), rel_tol=DERIVED_RTOL)
+    assert math.isclose(stats["Std Dev"], statistics.stdev(temps), rel_tol=DERIVED_RTOL)
     assert math.isclose(stats["Min"], min(temps), rel_tol=DERIVED_RTOL)
     assert math.isclose(stats["Max"], max(temps), rel_tol=DERIVED_RTOL)
 
@@ -808,3 +908,57 @@ def test_block_grand_mean_differs_from_global_temperature_mean() -> None:
     steps_1_500_mean = sum(_temperatures_by_step()[s] for s in range(1, TOTAL_STEPS + 1)) / TOTAL_STEPS
     assert math.isclose(block_grand, steps_1_500_mean, rel_tol=DERIVED_RTOL)
     assert not math.isclose(block_grand, global_mean, rel_tol=1e-4)
+
+
+def test_vacf_lag1_from_trajectory_velocities() -> None:
+    """VACF must use velocity columns from consecutive trajectory frames (instruction §3)."""
+    expected = _recompute_vacf_lag1(_parse_trajectory_frames_extended())
+    reported = _parse_vacf_lag1()
+    assert -1.0 <= reported <= 1.0
+    assert math.isclose(reported, expected, rel_tol=DERIVED_RTOL)
+
+
+def test_pressure_virial_last_frame() -> None:
+    """Pressure virial must recompute LJ pair forces from the step-500 trajectory frame."""
+    t500 = _temperature_from_ke(float(_energy_row(500)["ke"]))
+    positions = _parse_last_trajectory_frame()
+    thermal, virial_corr, total_p = _recompute_pressure_virial(positions, t500)
+    expected = {"thermal": thermal, "virial": virial_corr, "total": total_p}
+    reported = _parse_pressure_virial()
+    for key in ("thermal", "virial", "total"):
+        assert math.isclose(reported[key], expected[key], rel_tol=DERIVED_RTOL)
+    assert math.isclose(reported["total"], reported["thermal"] + reported["virial"], rel_tol=DERIVED_RTOL)
+
+
+def test_rdf_step250_matches_mid_trajectory_frame() -> None:
+    """rdf_step250.dat must be g(r) from the step-250 trajectory frame, not the last frame."""
+    mid_positions = _parse_trajectory_frames()[250 // TRAJECTORY_INTERVAL]
+    expected = _recompute_rdf(mid_positions)
+    lines = [line.strip() for line in (APP / "rdf_step250.dat").read_text().splitlines() if line.strip()]
+    assert len(lines) == int(RDF_MAX_R / RDF_BIN_WIDTH) + 1
+    for line in lines:
+        r_val, gr_val = map(float, line.split())
+        if r_val in expected:
+            assert math.isclose(gr_val, expected[r_val], rel_tol=RDF_RTOL, abs_tol=RDF_ABS_TOL)
+
+
+def test_step500_velocities_match_reference(reference: dict) -> None:
+    """Step-500 velocities for particles 0/42/999 must match the reference integrator."""
+    velocities = _parse_frame_velocities(TOTAL_STEPS // TRAJECTORY_INTERVAL)
+    for particle_id, ref_key in ((0, "particle0_step500"), (42, "particle42_step500"), (999, "particle999_step500")):
+        ref = reference[ref_key]
+        vx, vy, vz = velocities[particle_id]
+        for axis, val in zip(("vx", "vy", "vz"), (vx, vy, vz)):
+            assert math.isclose(val, ref[axis], rel_tol=REF_TRAJECTORY_RTOL)
+
+
+def test_rdf_step250_differs_from_final_rdf() -> None:
+    """Mid-trajectory g(r) must differ from the step-500 RDF (liquid has drifted)."""
+    final_lines = (APP / "rdf.dat").read_text().splitlines()
+    mid_lines = (APP / "rdf_step250.dat").read_text().splitlines()
+    diffs = [
+        abs(float(a.split()[1]) - float(b.split()[1]))
+        for a, b in zip(final_lines, mid_lines)
+        if float(a.split()[0]) >= 0.8
+    ]
+    assert max(diffs) > 0.01

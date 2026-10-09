@@ -9,7 +9,7 @@ Build a Lennard-Jones NVE pipeline in C++ with OpenMP and Unix post-processing. 
 - Cutoff: rc = 2.5σ
 - Time step: dt = 0.0005
 - Steps: 500 (log energies for steps 0 through 500 inclusive)
-- Trajectory: write `/app/trajectory.xyz` every 10 steps (VMD-compatible XYZ format)
+- Trajectory: write `/app/trajectory.xyz` every 10 steps. Each frame: line 1 = N, line 2 = `Step: <step>` (colon required), then N atom lines `Ar x y z vx vy vz` with **six decimals** on all seven numeric fields (extended XYZ — positions **and** velocities from the integrator).
 - OpenMP: 4 threads (`OMP_NUM_THREADS=4`) for integration and energy-reduction loops; the pairwise force loop must be race-free
 - Initial conditions: `/app/particles.dat` (`id x y z vx vy vz`). 10×10×10 lattice (spacing 1.0); x-fastest ids `ix=id%10`, `iy=(id//10)%10`, `iz=id//100`; particle 0 at (0.5,0.5,0.5). `random.seed(42)` Box-Muller per particle: `u1=max(random(),1e-12)`, `radius=sqrt(-2 ln u1)`, `angle=2π·random()`; first pair→vx,vy; second **cos**→vz; no rescale-to-exact-T, no COM subtraction.
 
@@ -46,7 +46,7 @@ Derive all analysis files from the simulation outputs:
 
 ### `/app/temperature_stats.txt`
 
-Compute temperature per step from kinetic energy using reduced units: T = 2·KE / (3·N). Write:
+Compute temperature per step from kinetic energy using reduced units: T = 2·KE / (3·N). Use **sample** standard deviation (ddof = 1, divide by N_steps − 1) for `Std Dev Temperature`. Write:
 
 ```
 Mean Temperature: <mean>
@@ -115,6 +115,39 @@ Energy sample variance: <Var_E>
 Window mean temperature: <T_win>
 Reduced Cv: <Cv>
 ```
+
+### `/app/rdf_step250.dat`
+
+Same g(r) procedure as `/app/rdf.dat` §3, but from the trajectory frame at **step 250** (not the last frame). Same 51 rows, left-edge bins 0.0 … 5.0.
+
+### `/app/vacf_lag1.txt`
+
+From **velocity columns** in `/app/trajectory.xyz` (do not finite-difference positions). Lag = **1 saved frame** (= 10 steps). For F = 51 frames and N = 1000:
+
+```
+num = Σ_p Σ_{f=0}^{F−2} (vx_p,f·vx_p,f+1 + vy_p,f·vy_p,f+1 + vz_p,f·vz_p,f+1)
+denom = Σ_p Σ_{f=0}^{F−1} (vx_p,f² + vy_p,f² + vz_p,f²)
+VACF = num / denom
+```
+
+Write exactly:
+
+```
+Lag frames: 1
+VACF: <value with at least 9 digits after the decimal>
+```
+
+### `/app/pressure_virial.txt`
+
+From the **step-500** trajectory frame positions, recompute LJ pair forces (ε = σ = rc = 2.5, same force magnitude as §2: `f_mag = 24·(2/r¹² − 1/r⁶)/r` on scalar r with MIC separation). For each unique pair i<j with r < rc, let `(dx,dy,dz)` be the MIC vector **from i to j** and `(fx,fy,fz)` the force **on particle i** from that pair (`f_q = −f_mag·(dx,dy,dz)/r` on i). Accumulate `vir = Σ_{i<j, r<rc} (dx·fx + dy·fy + dz·fz)`. With V = L³ and T₅₀₀ = 2·KE₅₀₀/(3N) from `energy.log` step 500:
+
+```
+Thermal pressure: <N·T₅₀₀ / V>
+Virial correction: <vir / (3V)>
+Total pressure: <thermal + virial correction>
+```
+
+Write those three labeled lines with six decimals.
 
 ### `/app/performance.txt`
 
