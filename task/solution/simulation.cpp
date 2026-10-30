@@ -98,6 +98,36 @@ public:
 #else
         const int nthreads = 1;
 #endif
+
+        if (nthreads == 1) {
+            for (int i = 0; i < n; ++i) {
+                particles[i].fx = 0.0;
+                particles[i].fy = 0.0;
+                particles[i].fz = 0.0;
+            }
+            for (int i = 0; i < n; ++i) {
+                for (int j = i + 1; j < n; ++j) {
+                    const double r2 = distance_sq(particles[i], particles[j]);
+                    if (r2 < cutoff * cutoff) {
+                        const double r = std::sqrt(r2);
+                        const double force = lj_force_mag(r);
+                        const double dx = minimum_image(particles[j].x - particles[i].x, box_size);
+                        const double dy = minimum_image(particles[j].y - particles[i].y, box_size);
+                        const double dz = minimum_image(particles[j].z - particles[i].z, box_size);
+                        const double fx = force * dx / r;
+                        const double fy = force * dy / r;
+                        const double fz = force * dz / r;
+
+                        particles[i].fx -= fx;
+                        particles[i].fy -= fy;
+                        particles[i].fz -= fz;
+                        particles[j].fx += fx;
+                        particles[j].fy += fy;
+                        particles[j].fz += fz;
+                    }
+                }
+            }
+        } else {
         ensure_thread_force_buffers(n, nthreads);
         double* fx_buf = thread_fx_.data();
         double* fy_buf = thread_fy_.data();
@@ -117,7 +147,7 @@ public:
             double* local_fz = fz_buf + static_cast<std::size_t>(tid * n);
 
 #ifdef _OPENMP
-#pragma omp for schedule(guided, 8)
+#pragma omp for schedule(dynamic, 16)
 #endif
             for (int i = 0; i < n; ++i) {
                 for (int j = i + 1; j < n; ++j) {
@@ -159,6 +189,7 @@ public:
             particles[i].fx = fx;
             particles[i].fy = fy;
             particles[i].fz = fz;
+        }
         }
 
         auto end = std::chrono::high_resolution_clock::now();

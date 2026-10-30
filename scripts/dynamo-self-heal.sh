@@ -118,18 +118,21 @@ git_push_if_needed() {
 }
 
 latest_run_for_branch() {
-  gh run list --repo "$REPO" --branch "$BRANCH" --limit 5 \
+  local head
+  head="$(git -C "$ROOT" rev-parse HEAD)"
+  gh run list --repo "$REPO" --limit 10 \
     --json databaseId,headSha,status,conclusion,createdAt \
     | python3 -c "
-import json,sys
-runs=json.load(sys.stdin)
-head=__import__('subprocess').check_output(['git','rev-parse','HEAD'], cwd='$ROOT', text=True).strip()
+import json, sys
+runs = json.load(sys.stdin)
+head = sys.argv[1]
 for r in runs:
-    if r.get('headSha','').startswith(head[:12]) or r.get('headSha')==head:
-        print(r['databaseId']); break
+    if r.get('headSha') == head:
+        print(r['databaseId'])
+        break
 else:
     print(runs[0]['databaseId'] if runs else '')
-"
+" "$head"
 }
 
 fetch_run_report() {
@@ -226,8 +229,8 @@ apply_known_fixes() {
     fi
   fi
 
-  if echo "$failures" | rg -q "PASS2_TOO_EASY"; then
-    warn "pass@2 too easy — task needs more verifier surface or subtler traps (50-test version may help once CI runs pass@2)"
+  if echo "$failures" | rg -q "test_parallel_force_time|force speedup|_MIN_FORCE_SPEEDUP"; then
+    warn "force speedup gate failed — ensure simulation.cpp uses single-thread fast path and dynamic scheduling"
   fi
 
   return "$fixed"
@@ -287,7 +290,7 @@ cycle_once() {
   local run_id
   run_id="$(latest_run_for_branch)"
   [[ -n "$run_id" ]] || die "no CI run found for branch $BRANCH"
-  log "Watching run $run_id…"
+  log "Watching run ${run_id}..."
 
   local conclusion
   conclusion="$(poll_until_complete "$run_id")"
