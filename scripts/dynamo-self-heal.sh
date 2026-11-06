@@ -1,60 +1,54 @@
 #!/usr/bin/env bash
-# dynamo-self-heal.sh — poll Dynamo CI, extract failures, apply known fixes, push.
+# dynamo-self-heal.sh — poll Dynamo CI, extract failures, apply fixes, push, repeat.
 #
 # Usage:
-#   ./scripts/dynamo-self-heal.sh              # one cycle: preflight → push → poll → report
-#   ./scripts/dynamo-self-heal.sh --loop 6     # up to 6 fix/push/poll cycles
-#   ./scripts/dynamo-self-heal.sh --no-push    # preflight + parse latest run only
-#   ./scripts/dynamo-self-heal.sh --fix-local  # run known local fixers without push
+#   ./scripts/dynamo-self-heal.sh --loop 8          # preflight → push → poll → fix → repeat
+#   ./scripts/dynamo-self-heal.sh --no-push         # poll latest run only (no commit/push)
+#   HARBOR=/path/to/harbor ./scripts/dynamo-self-heal.sh --loop 8
 #
-# Requires: gh, git, python3, harbor (optional but recommended for oracle preflight)
+# Env: BRANCH, REPO, PR_NUMBER, POLL_INTERVAL (90), POLL_TIMEOUT (7200), HARBOR
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TASK_DIR="$ROOT/task"
 REPORT_DIR="$ROOT/.dynamo-heal"
+ARTIFACT_DIR="$REPORT_DIR/artifacts"
 BRANCH="${BRANCH:-submission}"
 PR_NUMBER="${PR_NUMBER:-3}"
 REPO="${REPO:-handshake-project-dynamo/dynamo-e28fc47-data-science-and-reporting}"
 PUSH_REMOTE="${PUSH_REMOTE:-origin}"
-POLL_INTERVAL="${POLL_INTERVAL:-90}"
+POLL_INTERVAL="${POLL_INTERVAL:-60}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-7200}"
 MAX_CYCLES="${MAX_CYCLES:-1}"
 DO_PUSH=1
-DO_FIX_LOCAL=0
 HARBOR="${HARBOR:-$(command -v harbor 2>/dev/null || true)}"
 
-usage() {
-  sed -n '2,12p' "$0"
-}
-
-log() { printf '[heal] %s\n' "$*"; }
+log() { printf '[heal] %s\n' "$*" >&2; }
 warn() { printf '[heal] WARN: %s\n' "$*" >&2; }
 die() { printf '[heal] ERROR: %s\n' "$*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --loop) MAX_CYCLES="${2:-6}"; shift 2 ;;
+    --loop) MAX_CYCLES="${2:-8}"; shift 2 ;;
     --no-push) DO_PUSH=0; shift ;;
-    --fix-local) DO_FIX_LOCAL=1; shift ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
     --pr) PR_NUMBER="$2"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "unknown arg: $1" ;;
+    -h|--help)
+      sed -n '2,10p' "$0" >&2
+      exit 0
+      ;;
+    *) die "unknown arg: $1 (try --help)" ;;
   esac
 done
 
-mkdir -p "$REPORT_DIR"
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
-}
-
+mkdir -p "$REPORT_DIR" "$ARTIFACT_DIR"
+require_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing: $1"; }
 require_cmd gh
 require_cmd git
 require_cmd python3
+command -v rg >/dev/null 2>&1 || die "missing: rg (ripgrep)"
 
 instruction_tokens() {
   python3 - "$TASK_DIR/instruction.md" << 'PY'
@@ -63,129 +57,71 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text()
 try:
     import tiktoken
-    n = len(tiktoken.get_encoding("cl100k_base").encode(text))
+    print(len(tiktoken.get_encoding("cl100k_base").encode(text)))
 except Exception:
-    n = len(text) // 4
-print(n)
+    print(len(text) // 4)
 PY
 }
 
 preflight_local() {
-  log "Local preflight…"
+  log "Local preflight..."
   local tokens
   tokens="$(instruction_tokens)"
-  log "instruction.md tokens: $tokens (limit 1500)"
-  if [[ "$tokens" -gt 1500 ]]; then
-    warn "instruction exceeds 1500 tokens — static review will fail"
+  log "instruction.md: $tokens tokens (limit 1500)"
+  [[ "$tokens" -le 1500 ]] || { warn "instruction over token limit"; return 1; }
+
+  [[ -n "$HARBOR" && -x "$HARBOR" ]] || { warn "harbor not found — skip oracle preflight"; return 0; }
+
+  log "Running harbor oracle (cpus=2)..."
+  local logf="$REPORT_DIR/last-oracle.log"
+  if ! "$HARBOR" run -p "$TASK_DIR" --agent oracle \
+    -o "$ROOT/jobs" --job-name "heal-oracle-$(date +%Y%m%d-%H%M%S)" \
+    --ek "cpus=2" -q 2>&1 | tee "$logf"; then
+    warn "harbor oracle command failed"
     return 1
   fi
-
-  if [[ -n "$HARBOR" && -x "$HARBOR" ]]; then
-    log "Running harbor oracle (cpus=2)…"
-    if ! "$HARBOR" run -p "$TASK_DIR" --agent oracle \
-      -o "$ROOT/jobs" --job-name "heal-oracle-$(date +%Y%m%d-%H%M%S)" \
-      --ek "cpus=2" -q 2>&1 | tee "$REPORT_DIR/last-oracle.log" | tail -5; then
-      warn "oracle run failed — fix task before pushing"
-      return 1
-    fi
-    if ! rg -q "Mean: 1\.000|reward.*1\.0" "$REPORT_DIR/last-oracle.log" 2>/dev/null; then
-      warn "oracle may not have passed — check $REPORT_DIR/last-oracle.log"
-      return 1
-    fi
-    log "oracle preflight OK"
-  else
-    warn "harbor not found — skipping oracle preflight"
-  fi
+  rg -q "Mean: 1\.000|1\.0.*1" "$logf" || { warn "oracle reward not 1.0 — see $logf"; return 1; }
+  log "oracle preflight OK"
   return 0
 }
 
 git_push_if_needed() {
   [[ "$DO_PUSH" -eq 1 ]] || return 0
   cd "$ROOT"
-  if git diff --quiet && git diff --cached --quiet && [[ -z "$(git ls-files --others --exclude-standard task/ scripts/)" ]]; then
-    log "No task/script changes to push"
-    return 0
+  local msg="${1:-chore(heal): automated CI fix}"
+  if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard task/ scripts/)" ]]; then
+    git add task/ scripts/dynamo-self-heal.sh 2>/dev/null || git add task/
+    git diff --cached --quiet && { log "nothing to commit"; return 0; }
+    git commit -m "$msg"
   fi
-  git add task/ scripts/dynamo-self-heal.sh 2>/dev/null || git add task/
-  if git diff --cached --quiet; then
-    log "Nothing staged"
-    return 0
-  fi
-  local msg="${1:-chore: dynamo self-heal automated fix}"
-  git commit -m "$msg" || true
-  log "Pushing $BRANCH to $PUSH_REMOTE…"
+  log "Pushing $BRANCH..."
   git push -u "$PUSH_REMOTE" "$BRANCH"
 }
 
-latest_run_for_branch() {
+latest_run_for_head() {
   local head
   head="$(git -C "$ROOT" rev-parse HEAD)"
-  gh run list --repo "$REPO" --limit 10 \
-    --json databaseId,headSha,status,conclusion,createdAt \
+  gh run list --repo "$REPO" --limit 15 --json databaseId,headSha \
     | python3 -c "
 import json, sys
-runs = json.load(sys.stdin)
 head = sys.argv[1]
-for r in runs:
+for r in json.load(sys.stdin):
     if r.get('headSha') == head:
-        print(r['databaseId'])
-        break
-else:
-    print(runs[0]['databaseId'] if runs else '')
+        print(r['databaseId']); break
 " "$head"
-}
-
-fetch_run_report() {
-  local run_id="$1"
-  local out="$REPORT_DIR/run-${run_id}.log"
-  gh run view "$run_id" --repo "$REPO" --log-failed > "$out" 2>&1 || gh run view "$run_id" --repo "$REPO" --log > "$out" 2>&1 || true
-  echo "$out"
-}
-
-parse_failures() {
-  local logfile="$1"
-  local summary="$REPORT_DIR/last-failures.txt"
-  : > "$summary"
-
-  if rg -q "static checks failed" "$logfile" 2>/dev/null; then
-    echo "STATIC_FAIL: instruction/token/path/static check" >> "$summary"
-    rg "FAIL submission|instruction|token|relative path" "$logfile" 2>/dev/null | head -20 >> "$summary" || true
-  fi
-
-  if rg -q "eval verdict: FAIL|Verdict: FAIL" "$logfile" 2>/dev/null; then
-    echo "RUBRIC_FAIL: Harbor rubric review" >> "$summary"
-    rg "\| [0-9]+ \| [a-z_]+ \| FAIL" "$logfile" 2>/dev/null >> "$summary" || true
-    rg "\*\*[a-z_]+ \(FAIL\)" "$logfile" 2>/dev/null >> "$summary" || true
-  fi
-
-  if rg -q "pass@2: 2/2 passed|too easy|no valid fail" "$logfile" 2>/dev/null; then
-    echo "PASS2_TOO_EASY: need >=1 valid agent failure" >> "$summary"
-  fi
-
-  if rg -q "validation.*fail|oracle" "$logfile" 2>/dev/null; then
-    rg -i "validation|oracle|force.*speedup" "$logfile" 2>/dev/null | head -15 >> "$summary" || true
-  fi
-
-  if rg -q "Pipeline not green" "$logfile" 2>/dev/null; then
-    rg "review=|pass2=|validation=" "$logfile" 2>/dev/null | tail -3 >> "$summary" || true
-  fi
-
-  if [[ ! -s "$summary" ]]; then
-    echo "UNKNOWN: see $logfile" >> "$summary"
-  fi
-  cat "$summary"
 }
 
 poll_until_complete() {
   local run_id="$1"
   local deadline=$(( $(date +%s) + POLL_TIMEOUT ))
   while [[ $(date +%s) -lt deadline ]]; do
-    local status conclusion
-    read -r status conclusion < <(gh run view "$run_id" --repo "$REPO" \
-      --json status,conclusion -q '[.status,.conclusion]|@tsv' 2>/dev/null || echo "unknown unknown")
+    local line status conclusion
+    line="$(gh run view "$run_id" --repo "$REPO" --json status,conclusion -q '[.status,.conclusion]|@tsv' 2>/dev/null || echo "unknown unknown")"
+    status="${line%%$'\t'*}"
+    conclusion="${line#*$'\t'}"
     log "Run $run_id: status=$status conclusion=${conclusion:-pending}"
     if [[ "$status" == "completed" ]]; then
-      echo "$conclusion"
+      printf '%s' "${conclusion:-failure}"
       return 0
     fi
     sleep "$POLL_INTERVAL"
@@ -193,120 +129,160 @@ poll_until_complete() {
   die "timed out waiting for run $run_id"
 }
 
+fetch_pr_checks() {
+  gh pr checks "$PR_NUMBER" --repo "$REPO" 2>&1 | tee "$REPORT_DIR/last-checks.txt" || true
+}
+
+download_oracle_artifact() {
+  local run_id="$1"
+  rm -rf "$ARTIFACT_DIR/run-$run_id"
+  mkdir -p "$ARTIFACT_DIR/run-$run_id"
+  gh run download "$run_id" --repo "$REPO" \
+    -n harbor-output-validate -D "$ARTIFACT_DIR/run-$run_id" 2>/dev/null || return 1
+  return 0
+}
+
+parse_oracle_test_failures() {
+  local run_id="$1"
+  local summary="$REPORT_DIR/last-failures.txt"
+  : > "$summary"
+
+  fetch_pr_checks
+  if rg -q "review / gate.*pass" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
+    echo "GATE_PASS: pipeline green" >> "$summary"
+    cat "$summary"
+    return 0
+  fi
+
+  if rg -q "review / review.*fail" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
+    echo "REVIEW_FAIL: static or rubric" >> "$summary"
+    gh run view "$run_id" --repo "$REPO" --log-failed --job "$(gh run view "$run_id" --repo "$REPO" --json jobs -q '.jobs[]|select(.name|test("review / review"))|.databaseId' 2>/dev/null || true)" 2>/dev/null \
+      | rg "FAIL|static checks|Verdict: FAIL|eval verdict" | head -25 >> "$summary" || true
+  fi
+
+  if rg -q "review / validation.*fail" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
+    echo "VALIDATION_FAIL: oracle or nop" >> "$summary"
+    if download_oracle_artifact "$run_id"; then
+      local testout
+      testout="$(find "$ARTIFACT_DIR/run-$run_id" -name test-stdout.txt 2>/dev/null | head -1)"
+      if [[ -n "$testout" ]]; then
+        rg "FAILED |AssertionError|assert " "$testout" >> "$summary" || true
+        local passed failed
+        passed="$(rg -c "^PASSED" "$testout" 2>/dev/null || echo 0)"
+        failed="$(rg -c "^FAILED" "$testout" 2>/dev/null || echo 0)"
+        echo "ORACLE_SCORE: ${passed:-0} passed, ${failed:-0} failed" >> "$summary"
+        find "$ARTIFACT_DIR/run-$run_id" -name scaling.txt -exec echo "SCALING:" \; -exec cat {} \; >> "$summary" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  if rg -q "review / pass2.*fail" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
+    echo "PASS2_FAIL: too easy or agent failures" >> "$summary"
+    gh pr view "$PR_NUMBER" --repo "$REPO" --comments 2>/dev/null \
+      | rg -A5 "pass@2|too easy|valid fail" | head -20 >> "$summary" || true
+  fi
+
+  rg -q "review / pass2.*pass" "$REPORT_DIR/last-checks.txt" 2>/dev/null && echo "PASS2_PASS" >> "$summary"
+
+  [[ -s "$summary" ]] || echo "UNKNOWN: see $REPORT_DIR/last-checks.txt" >> "$summary"
+  cat "$summary"
+}
+
 apply_known_fixes() {
   local failures="$1"
-  local fixed=0
+  local changed=0
 
-  if echo "$failures" | rg -q "solution_quality|giant heredoc|analyze\.py"; then
-    if [[ -f "$TASK_DIR/solution/analyze.py" ]] && ! rg -q 'python3 << .PY.' "$TASK_DIR/solution/solve.sh" 2>/dev/null; then
-      log "analyze.py already extracted"
+  if echo "$failures" | rg -q "test_parallel_force_time|force speedup|_MIN_FORCE_SPEEDUP"; then
+    local sim="$TASK_DIR/solution/simulation.cpp"
+    if ! rg -q "nthreads == 1" "$sim" 2>/dev/null; then
+      warn "simulation.cpp missing single-thread force fast path — needs manual fix"
     else
-      warn "solution_quality: extract analysis to task/solution/analyze.py manually or re-run after merge"
+      log "single-thread force path present"
+    fi
+    if ! rg -q "schedule\\(dynamic" "$sim" 2>/dev/null; then
+      warn "consider schedule(dynamic) on force loop"
+    fi
+  fi
+
+  if echo "$failures" | rg -q "solution_quality|giant heredoc"; then
+    if [[ ! -f "$TASK_DIR/solution/analyze.py" ]]; then
+      warn "missing analyze.py — extract from solve.sh"
     fi
   fi
 
   if echo "$failures" | rg -q "difficulty_explanation"; then
-    if rg -q "computational chemists|HPC engineers" "$TASK_DIR/task.toml" 2>/dev/null; then
-      log "difficulty_explanation already mentions real-world audience"
-    else
-      warn "difficulty_explanation needs who/why prose in task.toml"
+    if ! rg -q "computational chemists|HPC engineers" "$TASK_DIR/task.toml" 2>/dev/null; then
+      warn "task.toml difficulty_explanation needs who/why"
     fi
   fi
 
-  if echo "$failures" | rg -q "STATIC_FAIL|1500|token|instruction"; then
+  if echo "$failures" | rg -q "STATIC_FAIL|REVIEW_FAIL.*token|1500"; then
     local tokens
     tokens="$(instruction_tokens)"
     if [[ "$tokens" -gt 1500 ]]; then
-      warn "instruction still $tokens tokens — condense task/instruction.md below 1500"
-    else
-      log "instruction token count OK ($tokens)"
+      warn "instruction $tokens tokens — must condense below 1500"
     fi
   fi
 
-  if echo "$failures" | rg -q "relative path|\./simulation"; then
-    if rg -q '\./simulation' "$TASK_DIR/instruction.md" 2>/dev/null; then
-      warn "replace ./simulation with /app/simulation in instruction.md"
-    fi
+  if echo "$failures" | rg -q "PASS2_TOO_EASY|PASS2_FAIL.*too easy|2/2 passed"; then
+    warn "pass@2 too easy — need >=1 valid agent failure (50-test hardening)"
   fi
 
-  if echo "$failures" | rg -q "test_parallel_force_time|force speedup|_MIN_FORCE_SPEEDUP"; then
-    warn "force speedup gate failed — ensure simulation.cpp uses single-thread fast path and dynamic scheduling"
-  fi
-
-  return "$fixed"
-}
-
-fetch_pr_pass2_comment() {
-  gh pr view "$PR_NUMBER" --repo "$REPO" --comments 2>/dev/null \
-    | rg -A30 "pass@2|Pre-check" | tail -35 || true
+  return "$changed"
 }
 
 print_report() {
-  local run_id="$1" conclusion="$2" failures="$3"
+  local run_id="$1" conclusion="$2"
   log "========== HEAL REPORT =========="
   log "Run: https://github.com/$REPO/actions/runs/$run_id"
   log "Conclusion: $conclusion"
-  log "Failures parsed:"
-  sed 's/^/  /' "$REPORT_DIR/last-failures.txt"
-  log "PR pass@2 snippet:"
-  fetch_pr_pass2_comment | sed 's/^/  /' | head -25
-  log "Full log: $REPORT_DIR/run-${run_id}.log"
+  log "Checks:"
+  sed 's/^/  /' "$REPORT_DIR/last-checks.txt" 2>/dev/null || true
+  log "Failures:"
+  sed 's/^/  /' "$REPORT_DIR/last-failures.txt" 2>/dev/null || true
   log "================================="
 }
 
-maybe_cursor_agent() {
-  local failures="$1"
-  if ! command -v cursor >/dev/null 2>&1; then
-    return 0
-  fi
-  if [[ "${USE_CURSOR_AGENT:-0}" != "1" ]]; then
-    log "Set USE_CURSOR_AGENT=1 to invoke cursor agent for unhandled failures"
-    return 0
-  fi
-  local prompt
-  prompt="Fix Dynamo task CI failures in $ROOT. Failures:
-$failures
-Read task/instruction.md, task/task.toml, task/solution/, task/tests/. Apply minimal honest fixes. Run harbor oracle. Do not commit submission/ or jobs/."
-  log "Invoking cursor agent…"
-  cursor agent --prompt "$prompt" || warn "cursor agent invocation failed"
+pipeline_green() {
+  fetch_pr_checks
+  rg -q "review / gate.*pass" "$REPORT_DIR/last-checks.txt" 2>/dev/null
 }
 
 cycle_once() {
   local cycle="$1"
-  log "——— cycle $cycle / $MAX_CYCLES ———"
+  log "=== cycle $cycle / $MAX_CYCLES ==="
 
-  if [[ "$DO_FIX_LOCAL" -eq 1 ]]; then
-    apply_known_fixes "$(cat "$REPORT_DIR/last-failures.txt" 2>/dev/null || echo "")" || true
-    preflight_local || true
-    return 0
-  fi
-
-  preflight_local || warn "preflight failed — continuing anyway (use --no-push to abort push)"
+  preflight_local || warn "local preflight failed — fix before push if possible"
 
   if [[ "$DO_PUSH" -eq 1 ]]; then
-    git_push_if_needed "chore(heal): cycle $cycle — rubric/static fixes"
+    git_push_if_needed "chore(heal): cycle $cycle CI fix"
   fi
 
   local run_id
-  run_id="$(latest_run_for_branch)"
-  [[ -n "$run_id" ]] || die "no CI run found for branch $BRANCH"
-  log "Watching run ${run_id}..."
+  run_id="$(latest_run_for_head)"
+  [[ -n "$run_id" ]] || die "no CI run for HEAD — push first or wait for workflow"
 
+  log "Watching run $run_id ..."
   local conclusion
   conclusion="$(poll_until_complete "$run_id")"
-  local logfile
-  logfile="$(fetch_run_report "$run_id")"
-  parse_failures "$logfile" | tee "$REPORT_DIR/last-failures.txt" >/dev/null
-  print_report "$run_id" "$conclusion" "$(cat "$REPORT_DIR/last-failures.txt")"
 
-  if [[ "$conclusion" == "success" ]]; then
-    log "CI green — done"
-    fetch_pr_pass2_comment
+  parse_oracle_test_failures "$run_id" | tee "$REPORT_DIR/last-failures.txt" >/dev/null
+  print_report "$run_id" "$conclusion"
+
+  if pipeline_green; then
+    log "Pipeline GREEN (gate passed)"
     return 0
   fi
 
   apply_known_fixes "$(cat "$REPORT_DIR/last-failures.txt")" || true
-  maybe_cursor_agent "$(cat "$REPORT_DIR/last-failures.txt")"
+
+  if [[ "${USE_CURSOR_AGENT:-0}" == "1" ]] && command -v cursor >/dev/null 2>&1; then
+    log "Invoking cursor agent for remaining failures..."
+    cursor agent --prompt "Fix Dynamo CI failures in $ROOT. Failures:
+$(cat "$REPORT_DIR/last-failures.txt")
+Minimal honest fixes. Run harbor oracle with cpus=2. Commit task/ only." || true
+  fi
+
   return 1
 }
 
@@ -317,12 +293,14 @@ main() {
   local cycle=1
   while [[ "$cycle" -le "$MAX_CYCLES" ]]; do
     if cycle_once "$cycle"; then
+      log "Done — CI gate is green."
       exit 0
     fi
     cycle=$((cycle + 1))
-    [[ "$cycle" -le "$MAX_CYCLES" ]] || break
-    log "Retrying after fixes…"
-    sleep 5
+    if [[ "$cycle" -le "$MAX_CYCLES" ]]; then
+      log "Cycle failed — retrying after local fixes (if any)..."
+      sleep 10
+    fi
   done
 
   die "exhausted $MAX_CYCLES cycles — see $REPORT_DIR/"
