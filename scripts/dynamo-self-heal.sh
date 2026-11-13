@@ -19,6 +19,7 @@ PR_NUMBER="${PR_NUMBER:-3}"
 REPO="${REPO:-handshake-project-dynamo/dynamo-e28fc47-data-science-and-reporting}"
 PUSH_REMOTE="${PUSH_REMOTE:-origin}"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
+# pass@2 agent trials can exceed 1h; use 7200+ for full pipeline
 POLL_TIMEOUT="${POLL_TIMEOUT:-7200}"
 MAX_CYCLES="${MAX_CYCLES:-1}"
 DO_PUSH=1
@@ -105,32 +106,69 @@ latest_run_for_head() {
     | python3 -c "
 import json, sys
 head = sys.argv[1]
-for r in json.load(sys.stdin):
+runs = json.load(sys.stdin)
+for r in runs:
     if r.get('headSha') == head:
         print(r['databaseId']); break
+else:
+    # fallback: newest run (e.g. local commit not pushed yet)
+    print(runs[0]['databaseId'] if runs else '')
 " "$head"
+}
+
+pending_jobs_summary() {
+  local run_id="$1"
+  gh run view "$run_id" --repo "$REPO" --json jobs \
+    -q '[.jobs[]|select(.status!="completed")|"\(.name)(\(.status))"]|join(", ")' 2>/dev/null || true
 }
 
 poll_until_complete() {
   local run_id="$1"
   local deadline=$(( $(date +%s) + POLL_TIMEOUT ))
+  local tick=0
   while [[ $(date +%s) -lt deadline ]]; do
-    local line status conclusion
+    local line status conclusion pending
     line="$(gh run view "$run_id" --repo "$REPO" --json status,conclusion -q '[.status,.conclusion]|@tsv' 2>/dev/null || echo "unknown unknown")"
     status="${line%%$'\t'*}"
     conclusion="${line#*$'\t'}"
-    log "Run $run_id: status=$status conclusion=${conclusion:-pending}"
+    pending="$(pending_jobs_summary "$run_id")"
+    if [[ -n "$pending" ]]; then
+      log "Run $run_id: status=$status conclusion=${conclusion:-pending} — pending: $pending"
+    else
+      log "Run $run_id: status=$status conclusion=${conclusion:-pending}"
+    fi
     if [[ "$status" == "completed" ]]; then
       printf '%s' "${conclusion:-failure}"
       return 0
     fi
+    tick=$((tick + 1))
+    if [[ "$tick" -eq 1 ]] || [[ $((tick % 5)) -eq 0 ]]; then
+      fetch_pr_checks >/dev/null 2>&1 || true
+    fi
     sleep "$POLL_INTERVAL"
   done
-  die "timed out waiting for run $run_id"
+  die "timed out after ${POLL_TIMEOUT}s waiting for run $run_id (pass@2 may need POLL_TIMEOUT=7200+)"
 }
 
 fetch_pr_checks() {
   gh pr checks "$PR_NUMBER" --repo "$REPO" 2>&1 | tee "$REPORT_DIR/last-checks.txt" || true
+}
+
+check_status() {
+  local name="$1"
+  awk -F'\t' -v n="$name" '$1 == n { print $2; exit }' "$REPORT_DIR/last-checks.txt" 2>/dev/null || true
+}
+
+wait_for_gate() {
+  local deadline=$(( $(date +%s) + 300 ))
+  while [[ $(date +%s) -lt deadline ]]; do
+    fetch_pr_checks
+    local gate
+    gate="$(check_status "review / gate")"
+    [[ -n "$gate" && "$gate" != "pending" ]] && return 0
+    sleep 15
+  done
+  warn "review / gate still pending after 5m — continuing with available checks"
 }
 
 download_oracle_artifact() {
@@ -148,10 +186,16 @@ parse_oracle_test_failures() {
   : > "$summary"
 
   fetch_pr_checks
-  if rg -q "review / gate.*pass" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
+  if pipeline_green; then
     echo "GATE_PASS: pipeline green" >> "$summary"
     cat "$summary"
     return 0
+  fi
+
+  local pass2_status
+  pass2_status="$(check_status "review / pass2")"
+  if [[ "$pass2_status" == "pending" ]]; then
+    echo "PASS2_PENDING: agent trials still running" >> "$summary"
   fi
 
   if rg -q "review / review.*fail" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
@@ -179,7 +223,9 @@ parse_oracle_test_failures() {
   if rg -q "review / pass2.*fail" "$REPORT_DIR/last-checks.txt" 2>/dev/null; then
     echo "PASS2_FAIL: too easy or agent failures" >> "$summary"
     gh pr view "$PR_NUMBER" --repo "$REPO" --comments 2>/dev/null \
-      | rg -A5 "pass@2|too easy|valid fail" | head -20 >> "$summary" || true
+      | rg -i "pass@2|too easy|valid fail|2/2 passed|pass2" | head -30 >> "$summary" || true
+    gh run view "$run_id" --repo "$REPO" --log-failed --job "$(gh run view "$run_id" --repo "$REPO" --json jobs -q '.jobs[]|select(.name|test("pass2"))|.databaseId' 2>/dev/null || true)" 2>/dev/null \
+      | rg -i "too easy|valid fail|passed|reward|Mean:" | head -25 >> "$summary" || true
   fi
 
   rg -q "review / pass2.*pass" "$REPORT_DIR/last-checks.txt" 2>/dev/null && echo "PASS2_PASS" >> "$summary"
@@ -244,8 +290,16 @@ print_report() {
 }
 
 pipeline_green() {
-  fetch_pr_checks
-  rg -q "review / gate.*pass" "$REPORT_DIR/last-checks.txt" 2>/dev/null
+  [[ -f "$REPORT_DIR/last-checks.txt" ]] || fetch_pr_checks
+  local gate pass2 review validation similarity
+  gate="$(check_status "review / gate")"
+  pass2="$(check_status "review / pass2")"
+  review="$(check_status "review / review")"
+  validation="$(check_status "review / validation")"
+  similarity="$(check_status "review / similarity")"
+  [[ "$gate" == "pass" ]] && return 0
+  [[ "$review" == "pass" && "$similarity" == "pass" && "$validation" == "pass" && "$pass2" == "pass" ]] && return 0
+  return 1
 }
 
 cycle_once() {
@@ -265,6 +319,7 @@ cycle_once() {
   log "Watching run $run_id ..."
   local conclusion
   conclusion="$(poll_until_complete "$run_id")"
+  wait_for_gate
 
   parse_oracle_test_failures "$run_id" | tee "$REPORT_DIR/last-failures.txt" >/dev/null
   print_report "$run_id" "$conclusion"
