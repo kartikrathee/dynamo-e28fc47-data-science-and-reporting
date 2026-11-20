@@ -64,12 +64,34 @@ except Exception:
 PY
 }
 
+committed_instruction_tokens() {
+  python3 - "$ROOT" << 'PY'
+import subprocess, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+try:
+    text = subprocess.check_output(["git", "-C", str(root), "show", "HEAD:task/instruction.md"], text=True)
+except Exception:
+    text = (root / "task/instruction.md").read_text()
+try:
+    import tiktoken
+    print(len(tiktoken.get_encoding("cl100k_base").encode(text)))
+except Exception:
+    print(len(text) // 4)
+PY
+}
+
 preflight_local() {
   log "Local preflight..."
-  local tokens
+  local tokens committed
   tokens="$(instruction_tokens)"
-  log "instruction.md: $tokens tokens (limit 1500)"
-  [[ "$tokens" -le 1500 ]] || { warn "instruction over token limit"; return 1; }
+  committed="$(committed_instruction_tokens)"
+  log "instruction.md: $tokens tokens (limit 1500; HEAD=$committed)"
+  if [[ "$tokens" -gt 1500 ]]; then
+    warn "instruction over token limit (working tree)"
+    [[ "$committed" -le 1500 ]] || return 1
+    warn "HEAD commit is within limit — push before CI if needed"
+  fi
 
   [[ -n "$HARBOR" && -x "$HARBOR" ]] || { warn "harbor not found — skip oracle preflight"; return 0; }
 
@@ -128,9 +150,14 @@ poll_until_complete() {
   local tick=0
   while [[ $(date +%s) -lt deadline ]]; do
     local line status conclusion pending
-    line="$(gh run view "$run_id" --repo "$REPO" --json status,conclusion -q '[.status,.conclusion]|@tsv' 2>/dev/null || echo "unknown unknown")"
+    line="$(gh run view "$run_id" --repo "$REPO" --json status,conclusion -q '[.status,.conclusion]|@tsv' 2>/dev/null || echo $'unknown\tunknown')"
     status="${line%%$'\t'*}"
     conclusion="${line#*$'\t'}"
+    if [[ "$status" == "unknown" ]]; then
+      warn "gh run view failed for $run_id — retrying"
+      sleep "$POLL_INTERVAL"
+      continue
+    fi
     pending="$(pending_jobs_summary "$run_id")"
     if [[ -n "$pending" ]]; then
       log "Run $run_id: status=$status conclusion=${conclusion:-pending} — pending: $pending"
